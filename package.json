@@ -1,0 +1,55 @@
+{
+  "name": "debug-to-jupyter-rust",
+  "displayName": "Debug to Jupyter (Rust Wasm)",
+  "version": "1.0.0",
+  "publisher": "your-name",
+  "description": "Export a live Python variable from a debug session into a Jupyter Notebook, configured to use the same virtual environment.",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onDebug"
+  ],
+  "main": "./out/extension.js",
+  "extensionDependencies": [
+    "ms-python.python"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "d2j.sendToJupyter",
+        "title": "Gửi sang Jupyter Notebook",
+        "category": "Debug"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "d2j.sendToJupyter",
+          "when": "view == debugVariables",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "files": [
+    "out/**",
+    "pkg/**"
+  ],
+  "scripts": {
+    "build:wasm": "cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --release",
+    "build:wasm:dev": "cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --dev",
+    "build:ts": "tsc -p tsconfig.json",
+    "build": "npm run build:wasm && npm run build:ts",
+    "watch:ts": "tsc -p tsconfig.json --watch",
+    "package": "npm run build && vsce package",
+    "pretest": "npm run build:wasm:dev && npm run build:ts",
+    "test": "node out/test/runTests.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.0.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
+  }
+}
