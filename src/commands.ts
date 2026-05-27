@@ -73,10 +73,6 @@ export async function handleSendToJupyter(
             }
         );
     } catch (err) {
-        if (err instanceof D2JError && err.kind === 'kernelRegFailed') {
-            showWarning('Could not register ipykernel. You may need to select a kernel manually.');
-        } else {
-            showError(err);
-        }
+        showError(err);
     }
 }

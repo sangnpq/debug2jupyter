@@ -1,6 +1,6 @@
 use wasm_bindgen::prelude::*;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 #[derive(Serialize)]
 pub struct NotebookError {
@@ -44,10 +44,7 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
         return error_json("EmptyVenvName", "Venv name cannot be empty");
     }
 
-    let normalized_pkl_path = pkl_path.replace('\\', "/");
-    let escaped_pkl_path = normalized_pkl_path
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'");
+    let escaped_pkl_path = pkl_path.replace('\\', "/").replace('\'', "\\'");
 
     let kernel_name = format!("python3_{}", sanitize_id(venv_name));
     let display_name = format!("Python 3 ({})", venv_name);
@@ -79,7 +76,7 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
                 "source": [
                     "# Debug to Jupyter Export\n",
                     "\n",
-                    format!("Variable: `{}`", var_name)
+                    format!("Variable: `{}`\n", var_name)
                 ]
             },
             {
@@ -91,7 +88,7 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
                 "source": [
                     "import joblib\n",
                     format!("{} = joblib.load('{}')\n", var_name, escaped_pkl_path),
-                    format!("print(f'Loaded {{type({}).__name__}}: {}')\n", var_name, var_name)
+                    format!("print(f'Loaded {{type({}).__name__}}: {{{}}}')\n", var_name, var_name)
                 ]
             }
         ]
@@ -104,6 +101,7 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn test_generate_notebook_basic() {
@@ -111,7 +109,7 @@ mod tests {
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
         assert_eq!(parsed["nbformat"], 4);
         assert_eq!(parsed["nbformat_minor"], 5);
-        assert_eq!(parsed["metadata"]["kernelspec"]["name"], "python3-myenv");
+        assert_eq!(parsed["metadata"]["kernelspec"]["name"], "python3_myenv");
         assert_eq!(parsed["cells"].as_array().unwrap().len(), 2);
     }
 
@@ -147,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_sanitize_id() {
-        assert_eq!(sanitize_id("My VEnv"), "my-v-env");
+        assert_eq!(sanitize_id("My VEnv"), "my-venv");
         assert_eq!(sanitize_id("simple"), "simple");
         assert_eq!(sanitize_id("a!@#b"), "a---b");
     }
@@ -156,7 +154,7 @@ mod tests {
     fn test_kernel_name_format() {
         let result = generate_jupyter_notebook("x", "/x.pkl", "data-science");
         let parsed: Value = serde_json::from_str(&result).expect("Should be valid JSON");
-        assert_eq!(parsed["metadata"]["kernelspec"]["name"], "python3-data-science");
+        assert_eq!(parsed["metadata"]["kernelspec"]["name"], "python3_data-science");
         assert_eq!(parsed["metadata"]["kernelspec"]["display_name"], "Python 3 (data-science)");
     }
 

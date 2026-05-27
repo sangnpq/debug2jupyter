@@ -2,10 +2,12 @@
   "name": "debug-to-jupyter-rust",
   "displayName": "Debug to Jupyter (Rust Wasm)",
   "version": "1.0.0",
-  "publisher": "your-name",
+  "publisher": "sangnpq",
+  "repository": "https://github.com/sangnpq/memory2jupyter",
   "description": "Export a live Python variable from a debug session into a Jupyter Notebook, configured to use the same virtual environment.",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.75.0",
+    "node": "20.x"
   },
   "activationEvents": [
     "onDebug"
@@ -18,38 +20,35 @@
     "commands": [
       {
         "command": "d2j.sendToJupyter",
-        "title": "Gửi sang Jupyter Notebook",
+        "title": "Send to Jupyter Notebook",
         "category": "Debug"
       }
     ],
     "menus": {
-      "view/item/context": [
+      "debug/variables/context": [
         {
           "command": "d2j.sendToJupyter",
-          "when": "view == debugVariables",
-          "group": "inline"
+          "when": "debugState == stopped",
+          "group": "1_modification"
         }
       ]
     }
   },
-  "files": [
-    "out/**",
-    "pkg/**"
-  ],
   "scripts": {
-    "build:wasm": "cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --release",
-    "build:wasm:dev": "cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --dev",
+    "build:wasm": "export PATH=\"$HOME/.cargo/bin:$PATH\" && cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --release",
+    "build:wasm:dev": "export PATH=\"$HOME/.cargo/bin:$PATH\" && cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --dev",
     "build:ts": "tsc -p tsconfig.json",
     "build": "npm run build:wasm && npm run build:ts",
     "watch:ts": "tsc -p tsconfig.json --watch",
     "package": "npm run build && vsce package",
-    "pretest": "npm run build:wasm:dev && npm run build:ts",
-    "test": "node out/test/runTests.js"
+    "pretest": "npm run build:ts",
+    "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "20.x",
     "@types/vscode": "^1.75.0",
-    "@types/node": "^18.0.0",
+    "@vscode/vsce": "^3.0.0",
     "typescript": "^5.3.0",
-    "@vscode/vsce": "^3.0.0"
+    "vitest": "^4.1.7"
   }
 }

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
 import * as path from 'path';
+import { D2JError } from './errors';
 
 export interface PythonEnvironment {
     pythonPath: string;
@@ -72,9 +73,9 @@ function extractVenvFolder(pythonPath: string): string {
     return path.dirname(pythonPath);
 }
 
-function execAsync(command: string, options: { timeout: number }): Promise<string> {
+function execAsync(command: string, args: string[], options: { timeout: number }): Promise<string> {
     return new Promise((resolve, reject) => {
-        execFile(command, [], { timeout: options.timeout, shell: true }, (error, stdout, stderr) => {
+        execFile(command, args, { timeout: options.timeout }, (error, stdout, stderr) => {
             if (error) { reject(error); }
             else { resolve(stdout); }
         });
@@ -82,20 +83,18 @@ function execAsync(command: string, options: { timeout: number }): Promise<strin
 }
 
 export async function ensurePythonPackages(pythonPath: string): Promise<void> {
-    const quoted = `"${pythonPath}"`;
-
     try {
-        await execAsync(`${quoted} -c "import joblib, ipykernel"`, { timeout: 10000 });
+        await execAsync(pythonPath, ['-c', 'import joblib, ipykernel'], { timeout: 10000 });
         return;
     } catch {
         // At least one is missing; install both
     }
 
     try {
-        await execAsync(`${quoted} -m pip install joblib ipykernel`, { timeout: 120000 });
+        await execAsync(pythonPath, ['-m', 'pip', 'install', 'joblib', 'ipykernel'], { timeout: 120000 });
     } catch (installErr) {
-        throw new Error(
-            `Failed to install joblib/ipykernel. Run manually: ${quoted} -m pip install joblib ipykernel`
+        throw new D2JError('pipInstallFailed',
+            `Failed to install joblib/ipykernel. Run manually: "${pythonPath}" -m pip install joblib ipykernel`
         );
     }
 
@@ -103,7 +102,8 @@ export async function ensurePythonPackages(pythonPath: string): Promise<void> {
     const kernelName = `python3_${venvName.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
     try {
         await execAsync(
-            `${quoted} -m ipykernel install --user --name="${kernelName}" --display-name="Python 3 (${venvName})"`,
+            pythonPath,
+            ['-m', 'ipykernel', 'install', '--user', '--name=' + kernelName, '--display-name=Python 3 (' + venvName + ')'],
             { timeout: 30000 }
         );
     } catch {
@@ -111,16 +111,3 @@ export async function ensurePythonPackages(pythonPath: string): Promise<void> {
     }
 }
 
-export async function registerKernel(pythonPath: string): Promise<void> {
-    const quoted = `"${pythonPath}"`;
-    const venvName = extractVenvName(pythonPath);
-    const kernelName = `python3_${venvName.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-    try {
-        await execAsync(
-            `${quoted} -m ipykernel install --user --name="${kernelName}" --display-name="Python 3 (${venvName})"`,
-            { timeout: 30000 }
-        );
-    } catch {
-        // Non-fatal
-    }
-}

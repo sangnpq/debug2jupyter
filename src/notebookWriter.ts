@@ -8,11 +8,22 @@ export async function writeAndOpenNotebook(
     workspaceRoot: string
 ): Promise<void> {
     const notebookPath = path.join(workspaceRoot, `D2J_${varName}.ipynb`);
-
     await fs.promises.writeFile(notebookPath, notebookJson, 'utf-8');
 
     const uri = vscode.Uri.file(notebookPath);
-    await vscode.commands.executeCommand('vscode.openWith', uri, 'jupyter-notebook');
+
+    const doc = await vscode.workspace.openNotebookDocument(uri);
+    await vscode.window.showNotebookDocument(doc, {
+        viewColumn: vscode.ViewColumn.Active,
+    });
+
+    const codeCell = doc.getCells().find((c: vscode.NotebookCell) => c.kind === vscode.NotebookCellKind.Code);
+    if (codeCell) {
+        await vscode.commands.executeCommand('notebook.cell.execute', {
+            document: doc,
+            cells: [codeCell.index],
+        });
+    }
 
     vscode.window.showInformationMessage(`Notebook created: D2J_${varName}.ipynb`);
 }

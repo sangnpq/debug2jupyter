@@ -13,6 +13,8 @@ export class D2JError extends Error {
 const ERROR_MESSAGES: Record<string, string> = {
     noWorkspace: 'No workspace is open. Please open a folder before using D2J.',
     noDebugSession: 'No active debug session. Start debugging first.',
+    noDebugThread: 'No threads found in debug session. Please ensure the debugger is running.',
+    noDebugStackFrame: 'No stack frames found in debug session. Please ensure the debugger is paused.',
     pythonExtNotInstalled: 'The Python extension (ms-python.python) is required. Install it from the marketplace.',
     noPythonEnv: 'Could not detect a Python environment. Select a Python interpreter.',
     pipInstallFailed: 'Failed to install required Python packages.',
@@ -21,7 +23,6 @@ const ERROR_MESSAGES: Record<string, string> = {
     wasmLoadFailed: 'Failed to load the notebook generator module. Try reinstalling the extension.',
     wasmGenerateError: 'Failed to generate notebook JSON.',
     fileWriteFailed: 'Failed to write the notebook file. Check workspace folder permissions.',
-    kernelRegFailed: 'Could not register ipykernel. You may need to select a kernel manually.',
     invalidVariable: 'Invalid variable selected.',
 };
 

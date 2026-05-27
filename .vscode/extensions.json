@@ -2,6 +2,6 @@
   "recommendations": [
     "rust-lang.rust-analyzer",
     "ms-python.python",
-    "v玄iive.wasm-pack"
+    "wasm-toolbox.wasm-pack"
   ]
 }

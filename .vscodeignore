@@ -1,0 +1,14 @@
+src/
+test/
+.claude/
+docs/
+cargo/
+.vscode/
+*.map
+.gitignore
+README.md
+tsconfig.json
+package-lock.json
+node_modules/
+target/
+*.vsix
