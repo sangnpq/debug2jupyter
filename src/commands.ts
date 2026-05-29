@@ -6,7 +6,6 @@ import { evaluateDapExpression, resolveCurrentFrameId } from './dapClient';
 import { WasmBridge } from './wasmBridge';
 import { writeAndOpenNotebook } from './notebookWriter';
 import { D2JError, showError } from './errors';
-import { sanitizeSourcePath, formatTimestamp } from './pathUtils';
 import { log, showOutput } from './logger';
 
 export interface DebugVariableElement {
@@ -66,19 +65,19 @@ export async function handleSendToJupyter(
                 log(`handleSendToJupyter: packages ensured`);
 
                 progress.report({ message: 'Resolving debug context...' });
-                const frameInfo = await resolveCurrentFrameId(activeSession, undefined, varName, workspaceRoot);
-                const timestamp = formatTimestamp();
+                const frameInfo = await resolveCurrentFrameId(activeSession, undefined, varName, workspaceRoot, wasmBridge);
+                const timestamp = wasmBridge.formatTimestamp();
                 log(`handleSendToJupyter: frame resolved (frameId=${frameInfo.frameId}), about to evaluate dump expression`);
 
                 progress.report({ message: 'Dumping variable to pickle...' });
                 const tmpDir = path.join(workspaceRoot, '.vscode', 'tmp');
                 await fs.promises.mkdir(tmpDir, { recursive: true });
-                const pklFileName = `${sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${frameInfo.line ?? 0}_${varName}_${timestamp}.pkl`;
+                const pklFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${frameInfo.line ?? 0}_${varName}_${timestamp}.pkl`;
                 const pklPath = path.join(tmpDir, pklFileName);
                 const escapedPklPath = pklPath.replace(/'/g, "\\'");
                 const dumpExpr = `import joblib; joblib.dump(${varName}, r'${escapedPklPath}')`;
                 log(`handleSendToJupyter: evaluating dumpExpr="${dumpExpr}"`);
-                await evaluateDapExpression(activeSession, dumpExpr, frameInfo, varName, workspaceRoot);
+                await evaluateDapExpression(activeSession, dumpExpr, frameInfo, varName, workspaceRoot, wasmBridge);
                 log(`handleSendToJupyter: dump succeeded, pklPath=${pklPath}`);
 
                 progress.report({ message: 'Generating notebook...' });
@@ -87,7 +86,7 @@ export async function handleSendToJupyter(
                 progress.report({ message: 'Writing notebook file...' });
                 const scriptsDir = path.join(workspaceRoot, '.vscode', 'scripts');
                 await fs.promises.mkdir(scriptsDir, { recursive: true });
-                const notebookFileName = `${sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${timestamp}.ipynb`;
+                const notebookFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${timestamp}.ipynb`;
                 const notebookPath = path.join(scriptsDir, notebookFileName);
                 await writeAndOpenNotebook(notebookJson, notebookPath);
                 log(`handleSendToJupyter: notebook written to ${notebookPath}`);

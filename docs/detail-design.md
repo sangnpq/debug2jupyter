@@ -28,15 +28,16 @@ D2J is a VS Code extension that exports a live Python variable from an active de
 │                     └──────────────┘    │  .ts         │    │
 │                                        └──────────────┘    │
 │                                                    │       │
-│                          ┌──────────────────────────▼──────┐│
-│                          │     notebookWriter.ts          ││
-│                          └─────────────────────────────────┘│
+│  ┌──────────────────┐  ┌──────────────────────────▼──────┐│
+│  │    pkg/  (wasm-pack)     │   notebookWriter.ts          ││
+│  │  debug_to_jupyter_rust   │   pathUtils.ts              ││
+│  │  .js + .wasm            │   logger.ts                  ││
+│  └──────────────────────────┘  └─────────────────────────────┘│
 │                                                            │
 │  ┌──────────────────────────┐  ┌──────────────────────────┐ │
-│  │    pkg/  (wasm-pack)     │  │   globalStorageUri/     │ │
-│  │  debug_to_jupyter_rust   │  │   {varName}.pkl        │ │
-│  │  .js + .wasm            │  └──────────────────────────┘ │
-│  └──────────────────────────┘                               │
+│  │    globalStorageUri/     │  │   outputChannel/          │ │
+│  │   D2J_{varName}.ipynb   │  │   D2J.log                 │ │
+│  └──────────────────────────┘  └──────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -160,7 +161,7 @@ test_single_quotes_in_path           # paths with ' are escaped
 
 ---
 
-## TypeScript Modules (6 modules)
+## TypeScript Modules (8 modules)
 
 ### `src/extension.ts` — Entry Point
 
@@ -277,6 +278,34 @@ export class D2JError extends Error {
 
 export function showError(err: unknown): void
 // Map D2JError.kind → user-friendly message → vscode.window.showErrorMessage
+```
+
+### `src/logger.ts` — Logging
+
+```typescript
+export function initLogger(context: vscode.ExtensionContext): void
+// Creates an OutputChannel named 'D2J' and registers it for disposal
+
+export function log(msg: string): void
+// Appends a timestamped line to the D2J output channel
+
+export function showOutput(): void
+// Reveals the output channel panel (true = preserve focus)
+```
+
+### `src/pathUtils.ts` — Path Utilities
+
+```typescript
+export function sanitizeSourcePath(sourcePath: string, workspaceRoot: string): string
+// Converts source file path to a safe variable name:
+// 1. Normalizes backslashes to forward slashes
+// 2. Computes relative path from workspace root
+// 3. If outside workspace, uses basename only
+// 4. Strips file extension
+// 5. Replaces unsafe chars with underscores
+
+export function formatTimestamp(): string
+// Returns: YYYYMMDDHHMMSS format for notebook filenames
 ```
 
 ---
