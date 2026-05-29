@@ -18,7 +18,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: wasm32-unknown-unknown
 
       - uses: actions/setup-node@v5
         with:
@@ -29,10 +29,9 @@ jobs:
         run: npm ci
 
       - name: Install wasm-pack
-        run: |
-          curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-          export PATH="$HOME/.cargo/bin:$PATH"
-          wasm-pack --version
+        uses: jetli/wasm-pack-action@v2
+        with:
+          version: 'latest'
 
       - name: Build and package
         run: |
