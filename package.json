@@ -35,8 +35,8 @@
     }
   },
   "scripts": {
-    "build:wasm": "export PATH=\"$HOME/.cargo/bin:$PATH\" && cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --release",
-    "build:wasm:dev": "export PATH=\"$HOME/.cargo/bin:$PATH\" && cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --dev",
+    "build:wasm": "cd cargo && ~/.cargo/bin/wasm-pack build --target nodejs --out-dir ../pkg --release",
+    "build:wasm:dev": "cd cargo && ~/.cargo/bin/wasm-pack build --target nodejs --out-dir ../pkg --dev",
     "build:ts": "tsc -p tsconfig.json",
     "build": "npm run build:wasm && npm run build:ts",
     "watch:ts": "tsc -p tsconfig.json --watch",
