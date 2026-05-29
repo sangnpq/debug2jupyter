@@ -6,7 +6,7 @@ import { evaluateDapExpression, resolveCurrentFrameId } from './dapClient';
 import { WasmBridge } from './wasmBridge';
 import { writeAndOpenNotebook } from './notebookWriter';
 import { D2JError, showError } from './errors';
-import { log, showOutput } from './logger';
+import { log, debug, showOutput } from './logger';
 
 export interface DebugVariableElement {
     variable: {
@@ -23,7 +23,7 @@ export async function handleSendToJupyter(
     context: vscode.ExtensionContext
 ): Promise<void> {
     const varName = element.variable.name;
-    log(`handleSendToJupyter: varName="${varName}", variablesReference=${element.variable.variablesReference}`);
+    debug(`handleSendToJupyter: varName="${varName}", variablesReference=${element.variable.variablesReference}`);
 
     if (!varName || varName.trim() === '') {
         showError(new D2JError('invalidVariable', 'Variable name is empty.'));
@@ -36,14 +36,14 @@ export async function handleSendToJupyter(
     }
 
     const activeSession = vscode.debug.activeDebugSession;
-    log(`handleSendToJupyter: activeSession=${activeSession ? `${activeSession.id} (${activeSession.name}, type=${activeSession.type})` : 'null'}`);
+    debug(`handleSendToJupyter: activeSession=${activeSession ? `${activeSession.id} (${activeSession.name}, type=${activeSession.type})` : 'null'}`);
     if (!activeSession) {
         showError(new D2JError('noDebugSession', 'No active debug session.'));
         return;
     }
 
     const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    log(`handleSendToJupyter: workspaceRoot=${workspaceRoot}`);
+    debug(`handleSendToJupyter: workspaceRoot=${workspaceRoot}`);
 
     try {
         await vscode.window.withProgress(
@@ -58,16 +58,16 @@ export async function handleSendToJupyter(
                 if (!pyEnv) {
                     throw new D2JError('noPythonEnv', 'Could not resolve Python environment.');
                 }
-                log(`handleSendToJupyter: pyEnv resolved: pythonPath=${pyEnv.pythonPath}, venvName=${pyEnv.venvName}`);
+                debug(`handleSendToJupyter: pyEnv resolved: pythonPath=${pyEnv.pythonPath}, venvName=${pyEnv.venvName}`);
 
                 progress.report({ message: 'Checking Python packages...' });
                 await ensurePythonPackages(pyEnv.pythonPath);
-                log(`handleSendToJupyter: packages ensured`);
+                debug(`handleSendToJupyter: packages ensured`);
 
                 progress.report({ message: 'Resolving debug context...' });
                 const frameInfo = await resolveCurrentFrameId(activeSession, undefined, varName, workspaceRoot, wasmBridge);
                 const timestamp = wasmBridge.formatTimestamp();
-                log(`handleSendToJupyter: frame resolved (frameId=${frameInfo.frameId}), about to evaluate dump expression`);
+                debug(`handleSendToJupyter: frame resolved (frameId=${frameInfo.frameId}), about to evaluate dump expression`);
 
                 progress.report({ message: 'Dumping variable to pickle...' });
                 const tmpDir = path.join(workspaceRoot, '.vscode', 'tmp');
@@ -76,9 +76,9 @@ export async function handleSendToJupyter(
                 const pklPath = path.join(tmpDir, pklFileName);
                 const escapedPklPath = pklPath.replace(/'/g, "\\'");
                 const dumpExpr = `import joblib; joblib.dump(${varName}, r'${escapedPklPath}')`;
-                log(`handleSendToJupyter: evaluating dumpExpr="${dumpExpr}"`);
+                debug(`handleSendToJupyter: evaluating dumpExpr="${dumpExpr}"`);
                 await evaluateDapExpression(activeSession, dumpExpr, frameInfo, varName, workspaceRoot, wasmBridge);
-                log(`handleSendToJupyter: dump succeeded, pklPath=${pklPath}`);
+                debug(`handleSendToJupyter: dump succeeded, pklPath=${pklPath}`);
 
                 progress.report({ message: 'Generating notebook...' });
                 const notebookJson = wasmBridge.generateNotebook(varName, pklPath, pyEnv.venvName);
@@ -89,11 +89,11 @@ export async function handleSendToJupyter(
                 const notebookFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${timestamp}.ipynb`;
                 const notebookPath = path.join(scriptsDir, notebookFileName);
                 await writeAndOpenNotebook(notebookJson, notebookPath);
-                log(`handleSendToJupyter: notebook written to ${notebookPath}`);
+                debug(`handleSendToJupyter: notebook written to ${notebookPath}`);
             }
         );
     } catch (err) {
-        log(`handleSendToJupyter: caught error: ${err instanceof Error ? `${err.message}\n${err.stack}` : String(err)}`);
+        debug(`handleSendToJupyter: caught error: ${err instanceof Error ? `${err.message}\n${err.stack}` : String(err)}`);
         showOutput();
         showError(err);
     }

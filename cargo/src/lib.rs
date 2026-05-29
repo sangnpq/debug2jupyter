@@ -88,7 +88,7 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
                 "source": [
                     "import joblib\n",
                     format!("{} = joblib.load('{}')\n", var_name, escaped_pkl_path),
-                    format!("print(f'Loaded {{type({}).__name__}}: {{{}}}')\n", var_name, var_name)
+                    format!("{}.style.set_properties(**{{'white-space': 'nowrap'}})\n", var_name)
                 ]
             }
         ]

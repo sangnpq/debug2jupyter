@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { D2JError } from './errors';
-import { log } from './logger';
+import { log, debug } from './logger';
 import { WasmBridge, RankedFrame } from './wasmBridge';
 
 export interface StackFrameInfo {
@@ -87,12 +87,12 @@ export async function resolveCurrentFrameId(
     workspaceRoot?: string,
     wasmBridge?: WasmBridge,
 ): Promise<StackFrameInfo> {
-    log(`resolveCurrentFrameId: session=${session.id}, name=${session.name}, type=${session.type}, variableName=${variableName ?? '(none)'}`);
+    debug(`resolveCurrentFrameId: session=${session.id}, name=${session.name}, type=${session.type}, variableName=${variableName ?? '(none)'}`);
 
     const threadsResponse = await session.customRequest('threads') as {
         threads?: Array<{ id: number; name: string }>;
     };
-    log(`resolveCurrentFrameId: all threads: ${JSON.stringify(threadsResponse?.threads)}`);
+    debug(`resolveCurrentFrameId: all threads: ${JSON.stringify(threadsResponse?.threads)}`);
 
     if (!threadsResponse?.threads?.length) {
         throw new D2JError('noDebugThread', 'No threads found in debug session.');
@@ -104,7 +104,7 @@ export async function resolveCurrentFrameId(
                 stackFrames?: Array<{ id: number; name?: string; source?: { path?: string; name?: string; sourceReference?: number }; line?: number; column?: number }>;
             };
             const topFrame = stResp?.stackFrames?.[0];
-            log(`resolveCurrentFrameId: thread id=${t.id} name="${t.name}" topFrame=${topFrame ? `{id=${topFrame.id}, name="${topFrame.name}", source=${JSON.stringify(topFrame.source)}, line=${topFrame.line}}` : 'none'}`);
+            debug(`resolveCurrentFrameId: thread id=${t.id} name="${t.name}" topFrame=${topFrame ? `{id=${topFrame.id}, name="${topFrame.name}", source=${JSON.stringify(topFrame.source)}, line=${topFrame.line}}` : 'none'}`);
             if (topFrame) {
                 return {
                     threadId: t.id,
@@ -118,7 +118,7 @@ export async function resolveCurrentFrameId(
                 } as ThreadFrameInfo;
             }
         } catch (e) {
-            log(`resolveCurrentFrameId: thread id=${t.id} name="${t.name}" stackTrace failed: ${e instanceof Error ? e.message : String(e)}`);
+            debug(`resolveCurrentFrameId: thread id=${t.id} name="${t.name}" stackTrace failed: ${e instanceof Error ? e.message : String(e)}`);
         }
         return undefined;
     });
@@ -131,7 +131,7 @@ export async function resolveCurrentFrameId(
     }
 
     if (variableName) {
-        log(`resolveCurrentFrameId: checking variable "${variableName}" across ${candidates.length} frames (in parallel)...`);
+        debug(`resolveCurrentFrameId: checking variable "${variableName}" across ${candidates.length} frames (in parallel)...`);
         const wsRoot = workspaceRoot ?? '';
 
         let sorted: ThreadFrameInfo[];
@@ -163,14 +163,14 @@ export async function resolveCurrentFrameId(
         const varCheckPromises = sorted.map(async (c) => {
             const has = await checkVariableInFrame(session, c.frameId, variableName);
             c.hasVariable = has;
-            log(`resolveCurrentFrameId: variable "${variableName}" in thread id=${c.threadId} name="${c.threadName}" frameId=${c.frameId} source=${c.sourcePath}: ${has ? 'FOUND' : 'not found'}`);
+            debug(`resolveCurrentFrameId: variable "${variableName}" in thread id=${c.threadId} name="${c.threadName}" frameId=${c.frameId} source=${c.sourcePath}: ${has ? 'FOUND' : 'not found'}`);
             return c;
         });
         const checked = await Promise.all(varCheckPromises);
 
         const found = checked.find(c => c.hasVariable);
         if (found) {
-            log(`resolveCurrentFrameId: found variable "${variableName}" in thread id=${found.threadId} name="${found.threadName}" frameId=${found.frameId} source=${found.sourcePath}`);
+            debug(`resolveCurrentFrameId: found variable "${variableName}" in thread id=${found.threadId} name="${found.threadName}" frameId=${found.frameId} source=${found.sourcePath}`);
             return {
                 frameId: found.frameId,
                 threadId: found.threadId,
@@ -178,7 +178,7 @@ export async function resolveCurrentFrameId(
                 line: found.line,
             };
         }
-        log(`resolveCurrentFrameId: variable "${variableName}" not found in any frame; falling back to heuristic selection`);
+        debug(`resolveCurrentFrameId: variable "${variableName}" not found in any frame; falling back to heuristic selection`);
     }
 
     const isVirtual = wasmBridge
@@ -190,11 +190,11 @@ export async function resolveCurrentFrameId(
 
     let chosen: ThreadFrameInfo;
     if (preferred && !isVirtual({ path: preferred.sourcePath, name: preferred.sourceName, sourceReference: preferred.sourceRef })) {
-        log(`resolveCurrentFrameId: using preferred threadId=${preferred.threadId} name="${preferred.threadName}" (real source)`);
+        debug(`resolveCurrentFrameId: using preferred threadId=${preferred.threadId} name="${preferred.threadName}" (real source)`);
         chosen = preferred;
     } else if (realCandidates.length > 0) {
         if (preferred) {
-            log(`resolveCurrentFrameId: preferred threadId=${preferredThreadId} is virtual source, picking best real-source thread instead`);
+            debug(`resolveCurrentFrameId: preferred threadId=${preferredThreadId} is virtual source, picking best real-source thread instead`);
         }
         if (wasmBridge) {
             const ranked = wasmBridge.rankThreadCandidates(candidatesToRankedJson(realCandidates), workspaceRoot ?? '');
@@ -209,14 +209,14 @@ export async function resolveCurrentFrameId(
             });
             chosen = realCandidates[0];
         }
-        log(`resolveCurrentFrameId: using real-source thread id=${chosen.threadId} name="${chosen.threadName}" source=${chosen.sourcePath}`);
+        debug(`resolveCurrentFrameId: using real-source thread id=${chosen.threadId} name="${chosen.threadName}" source=${chosen.sourcePath}`);
     } else {
         if (preferred) {
-            log(`resolveCurrentFrameId: preferred threadId=${preferredThreadId} is virtual source, no real-source threads available, falling back to preferred`);
+            debug(`resolveCurrentFrameId: preferred threadId=${preferredThreadId} is virtual source, no real-source threads available, falling back to preferred`);
             chosen = preferred;
         } else {
             chosen = candidates[0];
-            log(`resolveCurrentFrameId: no real-source threads, using first thread id=${chosen.threadId} name="${chosen.threadName}"`);
+            debug(`resolveCurrentFrameId: no real-source threads, using first thread id=${chosen.threadId} name="${chosen.threadName}"`);
         }
     }
 
@@ -226,7 +226,7 @@ export async function resolveCurrentFrameId(
         sourcePath: chosen.sourcePath,
         line: chosen.line,
     };
-    log(`resolveCurrentFrameId: resolved frameId=${result.frameId}, threadId=${result.threadId}, source=${result.sourcePath ?? '(no path)'}, line=${result.line}`);
+    debug(`resolveCurrentFrameId: resolved frameId=${result.frameId}, threadId=${result.threadId}, source=${result.sourcePath ?? '(no path)'}, line=${result.line}`);
     return result;
 }
 
@@ -252,65 +252,65 @@ export async function evaluateDapExpression(
         context: 'repl',
         frameId: resolved.frameId,
     };
-    log(`evaluateDapExpression: START frameId=${args.frameId}, threadId=${resolved.threadId}, source=${resolved.sourcePath ?? '(no path)'}, line=${resolved.line}, expression="${expression}"`);
+    debug(`evaluateDapExpression: START frameId=${args.frameId}, threadId=${resolved.threadId}, source=${resolved.sourcePath ?? '(no path)'}, line=${resolved.line}, expression="${expression}"`);
     const evalStart = Date.now();
 
     let response: { result?: string } | undefined;
     try {
         response = await session.customRequest('evaluate', args) as { result?: string };
-        log(`evaluateDapExpression: first attempt OK (${Date.now() - evalStart}ms)`);
+        debug(`evaluateDapExpression: first attempt OK (${Date.now() - evalStart}ms)`);
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        log(`evaluateDapExpression: first attempt FAILED after ${Date.now() - evalStart}ms: ${errMsg}`);
+        debug(`evaluateDapExpression: first attempt FAILED after ${Date.now() - evalStart}ms: ${errMsg}`);
         if (!isStaleFrameError(err)) {
-            log(`evaluateDapExpression: error is not stale-frame, re-throwing`);
+            debug(`evaluateDapExpression: error is not stale-frame, re-throwing`);
             throw err;
         }
 
-        log(`evaluateDapExpression: detected stale frame — will pause threadId=${resolved.threadId} and retry`);
+        debug(`evaluateDapExpression: detected stale frame — will pause threadId=${resolved.threadId} and retry`);
 
         try {
             const threadsBefore = await session.customRequest('threads') as { threads?: Array<{ id: number; name: string }> };
-            log(`evaluateDapExpression: threads BEFORE pause: ${JSON.stringify(threadsBefore?.threads)}`);
+            debug(`evaluateDapExpression: threads BEFORE pause: ${JSON.stringify(threadsBefore?.threads)}`);
             for (const t of threadsBefore?.threads ?? []) {
                 try {
                     const st = await session.customRequest('stackTrace', { threadId: t.id, levels: 1 }) as {
                         stackFrames?: Array<{ id: number; name?: string }>;
                     };
-                    log(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" topFrameId=${st?.stackFrames?.[0]?.id ?? 'none'} topFrameName="${st?.stackFrames?.[0]?.name ?? 'none'}"`);
+                    debug(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" topFrameId=${st?.stackFrames?.[0]?.id ?? 'none'} topFrameName="${st?.stackFrames?.[0]?.name ?? 'none'}"`);
                 } catch (stErr) {
-                    log(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" stackTrace query failed: ${stErr instanceof Error ? stErr.message : String(stErr)}`);
+                    debug(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" stackTrace query failed: ${stErr instanceof Error ? stErr.message : String(stErr)}`);
                 }
             }
         } catch (threadsErr) {
-            log(`evaluateDapExpression: threads query before pause failed: ${threadsErr instanceof Error ? threadsErr.message : String(threadsErr)}`);
+            debug(`evaluateDapExpression: threads query before pause failed: ${threadsErr instanceof Error ? threadsErr.message : String(threadsErr)}`);
         }
 
-        log(`evaluateDapExpression: calling pause({ threadId: ${resolved.threadId} })`);
+        debug(`evaluateDapExpression: calling pause({ threadId: ${resolved.threadId} })`);
         const pauseStart = Date.now();
         try {
             await session.customRequest('pause', { threadId: resolved.threadId });
-            log(`evaluateDapExpression: pause completed for threadId=${resolved.threadId} (${Date.now() - pauseStart}ms)`);
+            debug(`evaluateDapExpression: pause completed for threadId=${resolved.threadId} (${Date.now() - pauseStart}ms)`);
         } catch (pauseErr) {
-            log(`evaluateDapExpression: pause FAILED for threadId=${resolved.threadId}: ${pauseErr instanceof Error ? pauseErr.message : String(pauseErr)}`);
+            debug(`evaluateDapExpression: pause FAILED for threadId=${resolved.threadId}: ${pauseErr instanceof Error ? pauseErr.message : String(pauseErr)}`);
         }
 
         try {
             const threadsAfter = await session.customRequest('threads') as { threads?: Array<{ id: number; name: string }> };
-            log(`evaluateDapExpression: threads AFTER pause: ${JSON.stringify(threadsAfter?.threads)}`);
+            debug(`evaluateDapExpression: threads AFTER pause: ${JSON.stringify(threadsAfter?.threads)}`);
             for (const t of threadsAfter?.threads ?? []) {
                 try {
                     const st = await session.customRequest('stackTrace', { threadId: t.id, levels: 1 }) as {
                         stackFrames?: Array<{ id: number; name?: string; source?: { path?: string; name?: string; sourceReference?: number }; line?: number }>;
                     };
                     const tf = st?.stackFrames?.[0];
-                    log(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" frame={id=${tf?.id}, name="${tf?.name}", source=${JSON.stringify(tf?.source)}, line=${tf?.line}}`);
+                    debug(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" frame={id=${tf?.id}, name="${tf?.name}", source=${JSON.stringify(tf?.source)}, line=${tf?.line}}`);
                 } catch (stErr) {
-                    log(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" stackTrace query failed: ${stErr instanceof Error ? stErr.message : String(stErr)}`);
+                    debug(`evaluateDapExpression:   thread id=${t.id} name="${t.name}" stackTrace query failed: ${stErr instanceof Error ? stErr.message : String(stErr)}`);
                 }
             }
         } catch (threadsErr) {
-            log(`evaluateDapExpression: threads query after pause failed: ${threadsErr instanceof Error ? threadsErr.message : String(threadsErr)}`);
+            debug(`evaluateDapExpression: threads query after pause failed: ${threadsErr instanceof Error ? threadsErr.message : String(threadsErr)}`);
         }
 
         const maxRetries = 10;
@@ -320,7 +320,7 @@ export async function evaluateDapExpression(
         try {
             for (let i = 0; i < maxRetries; i++) {
                 const delay = baseDelay * (i + 1);
-                log(`evaluateDapExpression: retry ${i + 1}/${maxRetries} — waiting ${delay}ms then re-resolving frame`);
+                debug(`evaluateDapExpression: retry ${i + 1}/${maxRetries} — waiting ${delay}ms then re-resolving frame`);
                 await new Promise(r => setTimeout(r, delay));
                 const prevFrameId = resolved.frameId;
                 const isVirtual = wasmBridge
@@ -329,7 +329,7 @@ export async function evaluateDapExpression(
                 const retryPreferred = isVirtual ? undefined : resolved.threadId;
                 resolved = await resolveCurrentFrameId(session, retryPreferred, variableName, workspaceRoot, wasmBridge);
                 const frameChanged = resolved.frameId !== prevFrameId;
-                log(`evaluateDapExpression: retry ${i + 1} — frameId ${prevFrameId}→${resolved.frameId} (${frameChanged ? 'CHANGED' : 'same'}), source=${resolved.sourcePath ?? '(no path)'}, line=${resolved.line}`);
+                debug(`evaluateDapExpression: retry ${i + 1} — frameId ${prevFrameId}→${resolved.frameId} (${frameChanged ? 'CHANGED' : 'same'}), source=${resolved.sourcePath ?? '(no path)'}, line=${resolved.line}`);
 
                 try {
                     const retryStart = Date.now();
@@ -338,30 +338,30 @@ export async function evaluateDapExpression(
                         context: args.context,
                         frameId: resolved.frameId,
                     }) as { result?: string };
-                    log(`evaluateDapExpression: retry ${i + 1} SUCCEEDED (${Date.now() - retryStart}ms)`);
+                    debug(`evaluateDapExpression: retry ${i + 1} SUCCEEDED (${Date.now() - retryStart}ms)`);
                     break;
                 } catch (retryErr) {
                     const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
                     lastError = retryErr;
                     if (!isStaleFrameError(retryErr)) {
-                        log(`evaluateDapExpression: retry ${i + 1} FAILED with non-stale error: ${retryMsg}`);
+                        debug(`evaluateDapExpression: retry ${i + 1} FAILED with non-stale error: ${retryMsg}`);
                         throw retryErr;
                     }
-                    log(`evaluateDapExpression: retry ${i + 1} FAILED — still stale frame: ${retryMsg}`);
+                    debug(`evaluateDapExpression: retry ${i + 1} FAILED — still stale frame: ${retryMsg}`);
                 }
             }
 
             if (!response) {
-                log(`evaluateDapExpression: all ${maxRetries} retries exhausted, throwing last stale-frame error`);
+                debug(`evaluateDapExpression: all ${maxRetries} retries exhausted, throwing last stale-frame error`);
                 throw lastError;
             }
         } finally {
-            log(`evaluateDapExpression: FINALLY — continuing threadId=${resolved.threadId}`);
+            debug(`evaluateDapExpression: FINALLY — continuing threadId=${resolved.threadId}`);
             try {
                 await session.customRequest('continue', { threadId: resolved.threadId });
-                log(`evaluateDapExpression: continue OK for threadId=${resolved.threadId}`);
+                debug(`evaluateDapExpression: continue OK for threadId=${resolved.threadId}`);
             } catch (e: unknown) {
-                log(`evaluateDapExpression: continue FAILED for threadId=${resolved.threadId}: ${e instanceof Error ? e.message : String(e)}`);
+                debug(`evaluateDapExpression: continue FAILED for threadId=${resolved.threadId}: ${e instanceof Error ? e.message : String(e)}`);
             }
         }
     }
@@ -370,6 +370,6 @@ export async function evaluateDapExpression(
         throw new Error(`DAP evaluate failed for expression: ${expression}`);
     }
 
-    log(`evaluateDapExpression: DONE — total ${Date.now() - evalStart}ms, result length=${response.result.length}`);
+    debug(`evaluateDapExpression: DONE — total ${Date.now() - evalStart}ms, result length=${response.result.length}`);
     return response.result;
 }

@@ -17,6 +17,17 @@
     "ms-python.python"
   ],
   "contributes": {
+    "configuration": {
+      "title": "Debug to Jupyter",
+      "properties": {
+        "d2j.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": ["off", "error", "warning", "info", "debug"],
+          "description": "Logging level for D2J extension output"
+        }
+      }
+    },
     "commands": [
       {
         "command": "d2j.sendToJupyter",
