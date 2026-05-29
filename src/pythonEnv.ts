@@ -92,10 +92,15 @@ export async function ensurePythonPackages(pythonPath: string): Promise<void> {
 
     try {
         await execAsync(pythonPath, ['-m', 'pip', 'install', 'joblib', 'ipykernel'], { timeout: 120000 });
-    } catch (installErr) {
-        throw new D2JError('pipInstallFailed',
-            `Failed to install joblib/ipykernel. Run manually: "${pythonPath}" -m pip install joblib ipykernel`
-        );
+    } catch {
+        // pip may not be available (e.g. uv-managed venv); try uv as fallback
+        try {
+            await execAsync('uv', ['pip', 'install', '--python', pythonPath, 'joblib', 'ipykernel'], { timeout: 120000 });
+        } catch (uvInstallErr) {
+            throw new D2JError('pipInstallFailed',
+                `Failed to install joblib/ipykernel. Run manually: "${pythonPath}" -m pip install joblib ipykernel  OR  uv pip install --python "${pythonPath}" joblib ipykernel`
+            );
+        }
     }
 
     const venvName = extractVenvName(pythonPath);

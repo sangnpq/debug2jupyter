@@ -1,5 +1,6 @@
 src/
 test/
+tests/
 .claude/
 docs/
 cargo/

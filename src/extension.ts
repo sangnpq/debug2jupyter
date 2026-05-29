@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 import { handleSendToJupyter, DebugVariableElement } from './commands';
 import { WasmBridge } from './wasmBridge';
+import { initLogger } from './logger';
 
 let wasmBridge: WasmBridge | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+    initLogger(context);
     wasmBridge = new WasmBridge(context);
     await wasmBridge.initialize();
 

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { sanitizeSourcePath, formatTimestamp } from '../src/pathUtils';
 
 // We'll test the notebook generation by mocking the Wasm module
 // Since the actual wasm module requires native bindings, we'll test the
@@ -376,7 +377,13 @@ describe('DAP Frame Resolution', () => {
         }
     }
 
-    async function resolveCurrentFrameIdMock(session: any): Promise<number> {
+    interface StackFrameInfo {
+        frameId: number;
+        sourcePath?: string;
+        line?: number;
+    }
+
+    async function resolveCurrentFrameIdMock(session: any): Promise<StackFrameInfo> {
         const threadsResponse = await session.customRequest('threads');
         if (!threadsResponse?.threads?.length) {
             throw new MockD2JError('noDebugThread', 'No threads found in debug session.');
@@ -386,19 +393,24 @@ describe('DAP Frame Resolution', () => {
         if (!stackResponse?.stackFrames?.length) {
             throw new MockD2JError('noDebugStackFrame', 'No stack frames found in debug session.');
         }
-        return stackResponse.stackFrames[0].id;
+        const frame = stackResponse.stackFrames[0];
+        return {
+            frameId: frame.id,
+            sourcePath: frame.source?.path,
+            line: frame.line,
+        };
     }
 
     async function evaluateDapExpressionMock(
         session: any,
         expression: string,
-        frameId?: number
+        frameInfo?: StackFrameInfo
     ): Promise<string> {
-        const resolvedFrameId = frameId ?? await resolveCurrentFrameIdMock(session);
+        const resolved = frameInfo ?? await resolveCurrentFrameIdMock(session);
         const args = {
             expression,
             context: 'repl',
-            frameId: resolvedFrameId,
+            frameId: resolved.frameId,
         };
         const response = await session.customRequest('evaluate', args);
         if (!response || response.result === undefined) {
@@ -418,7 +430,7 @@ describe('DAP Frame Resolution', () => {
                 threads: [{ id: 1, name: 'MainThread' }],
             })
             .mockResolvedValueOnce({
-                stackFrames: [{ id: 42 }],
+                stackFrames: [{ id: 42, source: { path: '/project/src/main.py' }, line: 10 }],
             })
             .mockResolvedValueOnce({
                 result: 'dump succeeded',
@@ -437,12 +449,13 @@ describe('DAP Frame Resolution', () => {
         });
     });
 
-    it('should use explicit frameId when provided', async () => {
+    it('should use explicit StackFrameInfo when provided', async () => {
         mockSession.customRequest.mockResolvedValueOnce({
             result: 'dump succeeded',
         });
 
-        const result = await evaluateDapExpressionMock(mockSession, 'import joblib; joblib.dump(df, "/tmp/df.pkl")', 99);
+        const frameInfo: StackFrameInfo = { frameId: 99, sourcePath: '/project/app.py', line: 25 };
+        const result = await evaluateDapExpressionMock(mockSession, 'import joblib; joblib.dump(df, "/tmp/df.pkl")', frameInfo);
 
         expect(result).toBe('dump succeeded');
         expect(mockSession.customRequest).toHaveBeenCalledTimes(1);
@@ -483,7 +496,7 @@ describe('DAP Frame Resolution', () => {
                 threads: [{ id: 3, name: 'Worker' }, { id: 7, name: 'MainThread' }],
             })
             .mockResolvedValueOnce({
-                stackFrames: [{ id: 11 }],
+                stackFrames: [{ id: 11, source: { path: '/project/worker.py' }, line: 5 }],
             })
             .mockResolvedValueOnce({
                 result: 'ok',
@@ -492,6 +505,69 @@ describe('DAP Frame Resolution', () => {
         await evaluateDapExpressionMock(mockSession, 'x = 1');
 
         expect(mockSession.customRequest).toHaveBeenNthCalledWith(2, 'stackTrace', { threadId: 3, levels: 1 });
+    });
+});
+
+describe('sanitizeSourcePath', () => {
+    it('should produce relative path with underscores replacing slashes', () => {
+        expect(sanitizeSourcePath('/home/user/project/src/analysis/process.py', '/home/user/project'))
+            .toBe('src_analysis_process');
+    });
+
+    it('should handle root-level file', () => {
+        expect(sanitizeSourcePath('/home/user/project/main.py', '/home/user/project'))
+            .toBe('main');
+    });
+
+    it('should fall back to basename for files outside workspace', () => {
+        expect(sanitizeSourcePath('/tmp/external_script.py', '/home/user/project'))
+            .toBe('external_script');
+    });
+
+    it('should strip file extension', () => {
+        expect(sanitizeSourcePath('/home/user/project/notebook.ipynb', '/home/user/project'))
+            .toBe('notebook');
+    });
+
+    it('should handle Windows-style paths', () => {
+        expect(sanitizeSourcePath('C:\\Users\\test\\project\\src\\app.py', 'C:\\Users\\test\\project'))
+            .toBe('src_app');
+    });
+
+    it('should replace unsafe characters with underscores', () => {
+        expect(sanitizeSourcePath('/home/user/project/my file.py', '/home/user/project'))
+            .toBe('my_file');
+    });
+});
+
+describe('formatTimestamp', () => {
+    it('should return a 14-character string', () => {
+        const ts = formatTimestamp();
+        expect(ts.length).toBe(14);
+    });
+
+    it('should contain only digits', () => {
+        const ts = formatTimestamp();
+        expect(ts).toMatch(/^\d{14}$/);
+    });
+
+    it('should have format YYYYmmddHHMMss', () => {
+        const ts = formatTimestamp();
+        const year = ts.substring(0, 4);
+        const month = ts.substring(4, 6);
+        const day = ts.substring(6, 8);
+        const hour = ts.substring(8, 10);
+        const minute = ts.substring(10, 12);
+        const second = ts.substring(12, 14);
+
+        expect(parseInt(year)).toBeGreaterThanOrEqual(2025);
+        expect(parseInt(month)).toBeGreaterThanOrEqual(1);
+        expect(parseInt(month)).toBeLessThanOrEqual(12);
+        expect(parseInt(day)).toBeGreaterThanOrEqual(1);
+        expect(parseInt(day)).toBeLessThanOrEqual(31);
+        expect(parseInt(hour)).toBeLessThanOrEqual(23);
+        expect(parseInt(minute)).toBeLessThanOrEqual(59);
+        expect(parseInt(second)).toBeLessThanOrEqual(59);
     });
 });
 
