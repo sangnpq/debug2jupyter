@@ -39,41 +39,22 @@ To guarantee highly responsive, lock-free performance across complex multi-proce
 
 When extracting live objects from an active execution stack, standard serialization utilities like `pickle.dump` fail completely with a `PicklingError` if they encounter unpicklable closures, local frames, or dynamically bounded lambdas (e.g., `<locals>.<lambda>`).
 
-To resolve this issue without mutating live application data states, the DAP client injects an isolated execution sequence that leverages a custom `pickle.Pickler` class configured with a `reducer_override` lifecycle interceptor.
+To resolve this issue, D2J uses `cloudpickle` which natively handles closures, lambdas, and other dynamically created functions without requiring custom pickler classes.
 
 ### Injected Safe-Serialization Payload
 
 ```python
-import pickle
-import io
-import types
-import sys
-
-class D2JSafePickler(pickle.Pickler):
-    def reducer_override(self, obj):
-        # Target local functions, lambdas, and dynamically bound closures
-        if isinstance(obj, (types.FunctionType, types.LambdaType, types.MethodType)):
-            qualname = getattr(obj, '__qualname__', '')
-            # Intercept references inside nested or local function boundaries
-            if '<locals>' in qualname or not hasattr(obj, '__module__'):
-                return (str, (f"<D2J_STRIPPED_CLOSURE: {qualname}>",))
-        
-        # Safely capture unpicklable complex system components (files, sockets, locks)
-        try:
-            return NotImplemented
-        except Exception:
-            return (str, (f"<D2J_UNPICKLABLE_OBJECT: {type(obj).__name__}>",))
+import cloudpickle
 
 def d2j_serialize_variable(target_var, output_path):
     try:
         with open(output_path, 'wb') as f:
-            pickler = D2JSafePickler(f, protocol=pickle.HIGHEST_PROTOCOL)
-            pickler.dump(target_var)
+            cloudpickle.dump(target_var, f)
         print("D2J_SUCCESS")
     except Exception as e:
         # Final safety net: fall back to a string representation if hard failures occur
         with open(output_path, 'wb') as f:
-            pickle.dump(f"<D2J_SERIALIZATION_FAILURE: {str(e)}>", f)
+            cloudpickle.dump(f"<D2J_SERIALIZATION_FAILURE: {str(e)}>", f)
         print("D2J_FALLBACK")
 
 # Injected execution call hook

@@ -86,9 +86,9 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
                 "metadata": {},
                 "outputs": [],
                 "source": [
-                    "import pickle\n",
+                    "import cloudpickle\n",
                     format!("with open('{}', 'rb') as f:\n", escaped_pkl_path),
-                    format!("    {} = pickle.load(f)\n", var_name),
+                    format!("    {} = cloudpickle.load(f)\n", var_name),
                     format!("print(f'Successfully loaded live variable: {}')\n", var_name)
                 ]
             }

@@ -59,36 +59,22 @@ export async function handleSendToJupyter(
                 const timestamp = await wasmBridge.formatTimestamp();
                 debug(`handleSendToJupyter: frame resolved (frameId=${frameInfo.frameId}), about to evaluate dump expression`);
 
-                progress.report({ message: 'Dumping variable to pickle...' });
+                progress.report({ message: 'Dumping variable to file...' });
                 const storeDir = path.join(workspaceRoot, '.d2j_store');
                 await fs.promises.mkdir(storeDir, { recursive: true });
                 const pklFileName = `${await wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${frameInfo.line ?? 0}_${varName}_${timestamp}.pkl`;
                 const pklPath = path.join(storeDir, pklFileName);
                 const escapedPklPath = pklPath.replace(/'/g, "\\'");
 
-                // 💡 CRITICAL FIX: Array-join structure ensures clean, multiline Python formatting without compound semicolon runtime issues
                 const dumpScript = [
-                    `import pickle`,
-                    `import types`,
-                    `import io`,
-                    `class D2JSafePickler(pickle.Pickler):`,
-                    `    def reducer_override(self, obj):`,
-                    `        if isinstance(obj, (types.FunctionType, types.LambdaType, types.MethodType)):`,
-                    `            qualname = getattr(obj, '__qualname__', '')`,
-                    `            if '<locals>' in qualname or not hasattr(obj, '__module__'):`,
-                    `                return (str, (f"<D2J_STRIPPED_CLOSURE: {qualname}>",))`,
-                    `        try:`,
-                    `            return NotImplemented`,
-                    `        except Exception:`,
-                    `            return (str, (f"<D2J_UNPICKLABLE_OBJECT: {type(obj).__name__}>",))`,
+                    `import cloudpickle`,
                     `try:`,
                     `    with open('${escapedPklPath}', 'wb') as f:`,
-                    `        pickler = D2JSafePickler(f, protocol=pickle.HIGHEST_PROTOCOL)`,
-                    `        pickler.dump(${varName})`,
+                    `        cloudpickle.dump(${varName}, f)`,
                     `    print("D2J_SUCCESS")`,
                     `except Exception as e:`,
                     `    with open('${escapedPklPath}', 'wb') as f:`,
-                    `        pickle.dump(f"<D2J_SERIALIZATION_FAILURE: {str(e)}>", f)`,
+                    `        cloudpickle.dump(f"<D2J_SERIALIZATION_FAILURE: {str(e)}>", f)`,
                     `    print("D2J_FALLBACK")`
                 ].join('\n');
 

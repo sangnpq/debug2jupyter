@@ -10,6 +10,7 @@ dependencies = [
     "numpy==1.26.0",
     "ipykernel>=7.2.0",
     "joblib>=1.5.3",
+    "cloudpickle>=3.0.0",
 ]
 
 

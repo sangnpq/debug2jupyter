@@ -90,12 +90,12 @@ describe('Dataframe Run Tests', () => {
                         cell_type: 'code',
                         id: 'd2j-load',
                         metadata: {},
-source: [
-                            `import pickle\n`,
-                            `with open('${escapedPklPath}', 'rb') as f:\n`,
-                            `    ${varName} = pickle.load(f)\n`,
-                            `print(f'Successfully loaded live variable: ${varName}')\n`,
-                        ],
+                source: [
+                    `import cloudcloudpickle\n`,
+                    `with open('${escapedPklPath}', 'rb') as f:\n`,
+                    `    ${varName} = cloudcloudpickle.load(f)\n`,
+                    `print(f'Successfully loaded live variable: ${varName}')\n`,
+                ],
                         execution_count: null,
                         outputs: [],
                     },
@@ -228,9 +228,9 @@ source: [
                 id: 'd2j-load',
                 metadata: {},
                 source: [
-                    `import pickle\n`,
+                    `import cloudcloudpickle\n`,
                     `with open('${escapedPklPath}', 'rb') as f:\n`,
-                    `    ${varName} = pickle.load(f)\n`,
+                    `    ${varName} = cloudcloudpickle.load(f)\n`,
                     `print(f'Successfully loaded live variable: ${varName}')\n`,
                 ],
                 execution_count: null,
@@ -238,9 +238,9 @@ source: [
             };
 
             expect(codeCell.cell_type).toBe('code');
-            expect(codeCell.source.join('')).toContain('import pickle');
-            expect(codeCell.source.join('')).toContain('pickle.load(f)');
-            expect(codeCell.source.join('')).toContain(`${varName} = pickle.load(f)`);
+            expect(codeCell.source.join('')).toContain('import cloudcloudpickle');
+            expect(codeCell.source.join('')).toContain('cloudcloudpickle.load(f)');
+            expect(codeCell.source.join('')).toContain(`${varName} = cloudcloudpickle.load(f)`);
         });
 
         it('should have code cell with empty execution_count and outputs', () => {
@@ -248,7 +248,7 @@ source: [
                 cell_type: 'code',
                 id: 'd2j-load',
                 metadata: {},
-                source: ['import pickle\n', 'df = pickle.load()\n'],
+                source: ['import cloudcloudpickle\n', 'df = cloudcloudpickle.load()\n'],
                 execution_count: null,
                 outputs: [],
             };
@@ -321,7 +321,7 @@ source: [
                         cell_type: 'code',
                         id: 'd2j-load',
                         metadata: {},
-                        source: [`with open('/tmp/pkl', 'rb') as f:\n    ${varName} = pickle.load(f)\n`],
+                        source: [`with open('/tmp/pkl', 'rb') as f:\n    ${varName} = cloudcloudpickle.load(f)\n`],
                         execution_count: null,
                         outputs: [],
                     },
@@ -347,15 +347,15 @@ source: [
         });
     });
 
-    describe('Pickle Import Verification', () => {
-        it('should import pickle for dataframe deserialization', () => {
-            const sourceCode = 'import pickle';
-            expect(sourceCode).toContain('pickle');
+    describe('Cloudcloudpickle Import Verification', () => {
+        it('should import cloudcloudpickle for dataframe deserialization', () => {
+            const sourceCode = 'import cloudcloudpickle';
+            expect(sourceCode).toContain('cloudcloudpickle');
         });
 
-        it('should use pickle.load with context manager for dataframe loading', () => {
-            const loadCode = "with open('/tmp/df.pkl', 'rb') as f:\n    df = pickle.load(f)";
-            expect(loadCode).toContain('pickle.load');
+        it('should use cloudcloudpickle.load with context manager for dataframe loading', () => {
+            const loadCode = "with open('/tmp/df.pkl', 'rb') as f:\n    df = cloudcloudpickle.load(f)";
+            expect(loadCode).toContain('cloudcloudpickle.load');
             expect(loadCode).toContain("'rb'");
         });
     });
@@ -435,7 +435,7 @@ describe('DAP Frame Resolution', () => {
 
         const pklPath = '/tmp/df.pkl';
         const escapedPklPath = pklPath.replace(/\\/g, '/').replace(/'/g, "\\'");
-        const dumpExpr = `import pickle; f=open('${escapedPklPath}', 'wb'); pickle.dump(df, f); f.close()`;
+        const dumpExpr = `import cloudpickle; f=open('${escapedPklPath}', 'wb'); cloudpickle.dump(df, f); f.close()`;
         const result = await evaluateDapExpressionMock(mockSession, dumpExpr);
 
         expect(result).toBe('dump succeeded');
@@ -456,7 +456,7 @@ describe('DAP Frame Resolution', () => {
 
         const pklPath = '/tmp/df.pkl';
         const escapedPklPath = pklPath.replace(/\\/g, '/').replace(/'/g, "\\'");
-        const dumpExpr = `import pickle; f=open('${escapedPklPath}', 'wb'); pickle.dump(df, f); f.close()`;
+        const dumpExpr = `import cloudpickle; f=open('${escapedPklPath}', 'wb'); cloudpickle.dump(df, f); f.close()`;
         const frameInfo: StackFrameInfo = { frameId: 99, sourcePath: '/project/app.py', line: 25 };
         const result = await evaluateDapExpressionMock(mockSession, dumpExpr, frameInfo);
 
@@ -475,7 +475,7 @@ describe('DAP Frame Resolution', () => {
         });
 
         await expect(
-            evaluateDapExpressionMock(mockSession, 'import pickle')
+            evaluateDapExpressionMock(mockSession, 'import cloudpickle')
         ).rejects.toThrow('No threads found in debug session');
     });
 
@@ -489,7 +489,7 @@ describe('DAP Frame Resolution', () => {
             });
 
         await expect(
-            evaluateDapExpressionMock(mockSession, 'import pickle')
+            evaluateDapExpressionMock(mockSession, 'import cloudpickle')
         ).rejects.toThrow('No stack frames found in debug session');
     });
 
