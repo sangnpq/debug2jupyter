@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sanitizeSourcePath, formatTimestamp } from '../src/pathUtils';
+import { sanitizeSourcePath, formatTimestamp } from '../src/utils';
 
 // We'll test the notebook generation by mocking the Wasm module
 // Since the actual wasm module requires native bindings, we'll test the
@@ -90,10 +90,11 @@ describe('Dataframe Run Tests', () => {
                         cell_type: 'code',
                         id: 'd2j-load',
                         metadata: {},
-                        source: [
-                            `import joblib\n`,
-                            `${varName} = joblib.load('${escapedPklPath}')\n`,
-                            `print(f'Loaded {type({varName}).__name__}: {${varName}}')\n`,
+source: [
+                            `import pickle\n`,
+                            `with open('${escapedPklPath}', 'rb') as f:\n`,
+                            `    ${varName} = pickle.load(f)\n`,
+                            `print(f'Successfully loaded live variable: ${varName}')\n`,
                         ],
                         execution_count: null,
                         outputs: [],
@@ -227,18 +228,19 @@ describe('Dataframe Run Tests', () => {
                 id: 'd2j-load',
                 metadata: {},
                 source: [
-                    `import joblib\n`,
-                    `${varName} = joblib.load('${escapedPklPath}')\n`,
-                    `print(f'Loaded {type({varName}).__name__}: {${varName}}')\n`,
+                    `import pickle\n`,
+                    `with open('${escapedPklPath}', 'rb') as f:\n`,
+                    `    ${varName} = pickle.load(f)\n`,
+                    `print(f'Successfully loaded live variable: ${varName}')\n`,
                 ],
                 execution_count: null,
                 outputs: [],
             };
 
             expect(codeCell.cell_type).toBe('code');
-            expect(codeCell.source.join('')).toContain('import joblib');
-            expect(codeCell.source.join('')).toContain("joblib.load('");
-            expect(codeCell.source.join('')).toContain(`${varName} = joblib.load('${escapedPklPath}')`);
+            expect(codeCell.source.join('')).toContain('import pickle');
+            expect(codeCell.source.join('')).toContain('pickle.load(f)');
+            expect(codeCell.source.join('')).toContain(`${varName} = pickle.load(f)`);
         });
 
         it('should have code cell with empty execution_count and outputs', () => {
@@ -246,7 +248,7 @@ describe('Dataframe Run Tests', () => {
                 cell_type: 'code',
                 id: 'd2j-load',
                 metadata: {},
-                source: ['import joblib\n', 'df = joblib.load()\n'],
+                source: ['import pickle\n', 'df = pickle.load()\n'],
                 execution_count: null,
                 outputs: [],
             };
@@ -319,7 +321,7 @@ describe('Dataframe Run Tests', () => {
                         cell_type: 'code',
                         id: 'd2j-load',
                         metadata: {},
-                        source: [`${varName} = joblib.load('/tmp/pkl')\n`],
+                        source: [`with open('/tmp/pkl', 'rb') as f:\n    ${varName} = pickle.load(f)\n`],
                         execution_count: null,
                         outputs: [],
                     },
@@ -345,21 +347,16 @@ describe('Dataframe Run Tests', () => {
         });
     });
 
-    describe('Joblib Import Verification', () => {
-        it('should import joblib for dataframe deserialization', () => {
-            const sourceCode = 'import joblib';
-            expect(sourceCode).toContain('joblib');
+    describe('Pickle Import Verification', () => {
+        it('should import pickle for dataframe deserialization', () => {
+            const sourceCode = 'import pickle';
+            expect(sourceCode).toContain('pickle');
         });
 
-        it('should use joblib.load for dataframe loading', () => {
-            const loadCode = "df = joblib.load('/tmp/df.pkl')";
-            expect(loadCode).toContain('joblib.load');
-            expect(loadCode).toContain('/tmp/df.pkl');
-        });
-
-        it('should use type() to detect dataframe type dynamically', () => {
-            const printCode = "print(f'Loaded {type(df).__name__}: {df}')";
-            expect(printCode).toContain('type(df).__name__');
+        it('should use pickle.load with context manager for dataframe loading', () => {
+            const loadCode = "with open('/tmp/df.pkl', 'rb') as f:\n    df = pickle.load(f)";
+            expect(loadCode).toContain('pickle.load');
+            expect(loadCode).toContain("'rb'");
         });
     });
 });
@@ -436,14 +433,17 @@ describe('DAP Frame Resolution', () => {
                 result: 'dump succeeded',
             });
 
-        const result = await evaluateDapExpressionMock(mockSession, 'import joblib; joblib.dump(df, "/tmp/df.pkl")');
+        const pklPath = '/tmp/df.pkl';
+        const escapedPklPath = pklPath.replace(/\\/g, '/').replace(/'/g, "\\'");
+        const dumpExpr = `import pickle; f=open('${escapedPklPath}', 'wb'); pickle.dump(df, f); f.close()`;
+        const result = await evaluateDapExpressionMock(mockSession, dumpExpr);
 
         expect(result).toBe('dump succeeded');
         expect(mockSession.customRequest).toHaveBeenCalledTimes(3);
         expect(mockSession.customRequest).toHaveBeenNthCalledWith(1, 'threads');
         expect(mockSession.customRequest).toHaveBeenNthCalledWith(2, 'stackTrace', { threadId: 1, levels: 1 });
         expect(mockSession.customRequest).toHaveBeenNthCalledWith(3, 'evaluate', {
-            expression: 'import joblib; joblib.dump(df, "/tmp/df.pkl")',
+            expression: dumpExpr,
             context: 'repl',
             frameId: 42,
         });
@@ -454,13 +454,16 @@ describe('DAP Frame Resolution', () => {
             result: 'dump succeeded',
         });
 
+        const pklPath = '/tmp/df.pkl';
+        const escapedPklPath = pklPath.replace(/\\/g, '/').replace(/'/g, "\\'");
+        const dumpExpr = `import pickle; f=open('${escapedPklPath}', 'wb'); pickle.dump(df, f); f.close()`;
         const frameInfo: StackFrameInfo = { frameId: 99, sourcePath: '/project/app.py', line: 25 };
-        const result = await evaluateDapExpressionMock(mockSession, 'import joblib; joblib.dump(df, "/tmp/df.pkl")', frameInfo);
+        const result = await evaluateDapExpressionMock(mockSession, dumpExpr, frameInfo);
 
         expect(result).toBe('dump succeeded');
         expect(mockSession.customRequest).toHaveBeenCalledTimes(1);
         expect(mockSession.customRequest).toHaveBeenCalledWith('evaluate', {
-            expression: 'import joblib; joblib.dump(df, "/tmp/df.pkl")',
+            expression: dumpExpr,
             context: 'repl',
             frameId: 99,
         });
@@ -472,7 +475,7 @@ describe('DAP Frame Resolution', () => {
         });
 
         await expect(
-            evaluateDapExpressionMock(mockSession, 'import joblib')
+            evaluateDapExpressionMock(mockSession, 'import pickle')
         ).rejects.toThrow('No threads found in debug session');
     });
 
@@ -486,7 +489,7 @@ describe('DAP Frame Resolution', () => {
             });
 
         await expect(
-            evaluateDapExpressionMock(mockSession, 'import joblib')
+            evaluateDapExpressionMock(mockSession, 'import pickle')
         ).rejects.toThrow('No stack frames found in debug session');
     });
 

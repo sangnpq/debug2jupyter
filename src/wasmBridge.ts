@@ -38,20 +38,11 @@ export class WasmBridge {
         if (!this.generateNotebookFn) {
             throw new Error('Wasm module not initialized. Call initialize() first.');
         }
-
         const result = this.generateNotebookFn(varName, pklPath, venvName);
-
-        try {
-            const parsed = JSON.parse(result);
-            if (parsed.error) {
-                throw new Error(`Notebook generation error (${parsed.kind}): ${parsed.error}`);
-            }
-        } catch (parseErr) {
-            if (parseErr instanceof Error && parseErr.message.includes('Notebook generation error')) {
-                throw parseErr;
-            }
+        const parsed = JSON.parse(result);
+        if (parsed.error) {
+            throw new Error(`Notebook generation error (${parsed.kind}): ${parsed.error}`);
         }
-
         return result;
     }
 
@@ -69,28 +60,27 @@ export class WasmBridge {
     }
 
     isVirtualSource(source: { path?: string; name?: string; sourceReference?: number }): boolean {
-        if (!this.isVirtualSourceFn) {
-            const src = source;
-            if (src.sourceReference && src.sourceReference > 0) return true;
-            if (src.path === '<string>' || src.path === '<stdin>' || src.path === '<repl>') return true;
-            if (!src.path && !src.name) return true;
-            return false;
+        if (this.isVirtualSourceFn) {
+            const sourceJson = JSON.stringify({
+                path: source.path ?? null,
+                name: source.name ?? null,
+                source_reference: source.sourceReference ?? null,
+            });
+            const result = this.isVirtualSourceFn(sourceJson);
+            const parsed = JSON.parse(result);
+            if (parsed.error) {
+                return this.isVirtualSourceFallback(source);
+            }
+            return parsed.is_virtual as boolean;
         }
-        const sourceJson = JSON.stringify({
-            path: source.path ?? null,
-            name: source.name ?? null,
-            source_reference: source.sourceReference ?? null,
-        });
-        const result = this.isVirtualSourceFn(sourceJson);
-        const parsed = JSON.parse(result);
-        if (parsed.error) {
-            const src = source;
-            if (src.sourceReference && src.sourceReference > 0) return true;
-            if (src.path === '<string>' || src.path === '<stdin>' || src.path === '<repl>') return true;
-            if (!src.path && !src.name) return true;
-            return false;
-        }
-        return parsed.isVirtual as boolean;
+        return this.isVirtualSourceFallback(source);
+    }
+
+    private isVirtualSourceFallback(source: { path?: string; name?: string; sourceReference?: number }): boolean {
+        if (source.sourceReference && source.sourceReference > 0) return true;
+        if (source.path === '<string>' || source.path === '<stdin>' || source.path === '<repl>') return true;
+        if (!source.path && !source.name) return true;
+        return false;
     }
 
     sanitizeSourcePath(sourcePath: string, workspaceRoot: string): string {

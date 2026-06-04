@@ -10,7 +10,7 @@
     "node": "20.x"
   },
   "activationEvents": [
-    "onDebug"
+    "onCommand:d2j.sendToJupyter"
   ],
   "main": "./out/extension.js",
   "extensionDependencies": [

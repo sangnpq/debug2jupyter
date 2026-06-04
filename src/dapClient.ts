@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { D2JError } from './errors';
 import { log, debug } from './logger';
 import { WasmBridge, RankedFrame } from './wasmBridge';
@@ -11,32 +10,11 @@ export interface StackFrameInfo {
     line?: number;
 }
 
-function isVirtualSourceFallback(source?: { path?: string; name?: string; sourceReference?: number }): boolean {
-    if (!source) return true;
-    if (source.sourceReference && source.sourceReference > 0) return true;
-    if (source.path === '<string>' || source.path === '<stdin>' || source.path === '<repl>') return true;
-    return false;
-}
-
-function getSourcePriorityFallback(sourcePath: string | undefined, workspaceRoot: string): number {
+function getSourcePriority(sourcePath: string | undefined, workspaceRoot: string): number {
     if (!sourcePath) return 3;
     if (sourcePath.startsWith(workspaceRoot)) return 0;
     if (sourcePath.includes('site-packages')) return 1;
     return 2;
-}
-
-function candidatesToRankedJson(candidates: ThreadFrameInfo[]): unknown[] {
-    return candidates.map(c => ({
-        thread_id: c.threadId,
-        thread_name: c.threadName,
-        frame_id: c.frameId,
-        frame_name: c.frameName,
-        source_path: c.sourcePath ?? null,
-        source_name: c.sourceName ?? null,
-        source_ref: c.sourceRef ?? null,
-        line: c.line ?? null,
-        has_variable: c.hasVariable ?? null,
-    }));
 }
 
 interface ThreadFrameInfo {
@@ -68,14 +46,13 @@ async function checkVariableInFrame(
                 }) as {
                     variables?: Array<{ name: string; value: string; variablesReference: number }>;
                 };
-                const found = varsResp?.variables?.some(v => v.name === variableName);
-                if (found) return true;
+                if (varsResp?.variables?.some(v => v.name === variableName)) {
+                    return true;
+                }
             } catch {
-                // skip unreadable scope
             }
         }
     } catch {
-        // skip frames we can't inspect
     }
     return false;
 }
@@ -136,7 +113,17 @@ export async function resolveCurrentFrameId(
 
         let sorted: ThreadFrameInfo[];
         if (wasmBridge) {
-            const ranked = wasmBridge.rankThreadCandidates(candidatesToRankedJson(candidates), wsRoot);
+            const ranked = wasmBridge.rankThreadCandidates(candidates.map(c => ({
+                thread_id: c.threadId,
+                thread_name: c.threadName,
+                frame_id: c.frameId,
+                frame_name: c.frameName,
+                source_path: c.sourcePath ?? null,
+                source_name: c.sourceName ?? null,
+                source_ref: c.sourceRef ?? null,
+                line: c.line ?? null,
+                has_variable: c.hasVariable ?? null,
+            })), wsRoot);
             const rankedMap = new Map<number, RankedFrame>();
             for (const r of ranked) {
                 rankedMap.set(r.frame_id, r);
@@ -148,14 +135,9 @@ export async function resolveCurrentFrameId(
             });
         } else {
             sorted = [...candidates].sort((a, b) => {
-                const pa = getSourcePriorityFallback(a.sourcePath, wsRoot);
-                const pb = getSourcePriorityFallback(b.sourcePath, wsRoot);
+                const pa = getSourcePriority(a.sourcePath, wsRoot);
+                const pb = getSourcePriority(b.sourcePath, wsRoot);
                 if (pa !== pb) return pa - pb;
-                if (a.sourcePath && b.sourcePath) {
-                    const aV = isVirtualSourceFallback({ path: a.sourcePath, sourceReference: a.sourceRef }) ? 1 : 0;
-                    const bV = isVirtualSourceFallback({ path: b.sourcePath, sourceReference: b.sourceRef }) ? 1 : 0;
-                    if (aV !== bV) return aV - bV;
-                }
                 return a.threadId - b.threadId;
             });
         }
@@ -181,9 +163,8 @@ export async function resolveCurrentFrameId(
         debug(`resolveCurrentFrameId: variable "${variableName}" not found in any frame; falling back to heuristic selection`);
     }
 
-    const isVirtual = wasmBridge
-        ? (s: { path?: string; name?: string; sourceReference?: number }) => wasmBridge.isVirtualSource(s)
-        : isVirtualSourceFallback;
+    const isVirtual = (s: { path?: string; name?: string; sourceReference?: number }) =>
+        wasmBridge ? wasmBridge.isVirtualSource(s) : (s.sourceReference && s.sourceReference > 0) || s.path === '<string>' || s.path === '<stdin>' || s.path === '<repl>' || (!s.path && !s.name);
 
     const realCandidates = candidates.filter(c => !isVirtual({ path: c.sourcePath, name: c.sourceName, sourceReference: c.sourceRef }));
     const preferred = preferredThreadId !== undefined ? candidates.find(c => c.threadId === preferredThreadId) : undefined;
@@ -197,13 +178,23 @@ export async function resolveCurrentFrameId(
             debug(`resolveCurrentFrameId: preferred threadId=${preferredThreadId} is virtual source, picking best real-source thread instead`);
         }
         if (wasmBridge) {
-            const ranked = wasmBridge.rankThreadCandidates(candidatesToRankedJson(realCandidates), workspaceRoot ?? '');
+            const ranked = wasmBridge.rankThreadCandidates(realCandidates.map(c => ({
+                thread_id: c.threadId,
+                thread_name: c.threadName,
+                frame_id: c.frameId,
+                frame_name: c.frameName,
+                source_path: c.sourcePath ?? null,
+                source_name: c.sourceName ?? null,
+                source_ref: c.sourceRef ?? null,
+                line: c.line ?? null,
+                has_variable: c.hasVariable ?? null,
+            })), workspaceRoot ?? '');
             const best = ranked[0];
             chosen = realCandidates.find(c => c.frameId === best.frame_id)!;
         } else {
             realCandidates.sort((a, b) => {
-                const pa = getSourcePriorityFallback(a.sourcePath, workspaceRoot ?? '');
-                const pb = getSourcePriorityFallback(b.sourcePath, workspaceRoot ?? '');
+                const pa = getSourcePriority(a.sourcePath, workspaceRoot ?? '');
+                const pb = getSourcePriority(b.sourcePath, workspaceRoot ?? '');
                 if (pa !== pb) return pa - pb;
                 return a.threadId - b.threadId;
             });
@@ -323,10 +314,10 @@ export async function evaluateDapExpression(
                 debug(`evaluateDapExpression: retry ${i + 1}/${maxRetries} — waiting ${delay}ms then re-resolving frame`);
                 await new Promise(r => setTimeout(r, delay));
                 const prevFrameId = resolved.frameId;
-                const isVirtual = wasmBridge
+                const isVirtualSrc = wasmBridge
                     ? wasmBridge.isVirtualSource({ path: resolved.sourcePath, sourceReference: undefined })
-                    : isVirtualSourceFallback({ path: resolved.sourcePath, sourceReference: undefined });
-                const retryPreferred = isVirtual ? undefined : resolved.threadId;
+                    : (resolved.sourcePath === '<string>' || resolved.sourcePath === '<stdin>' || resolved.sourcePath === '<repl>');
+                const retryPreferred = isVirtualSrc ? undefined : resolved.threadId;
                 resolved = await resolveCurrentFrameId(session, retryPreferred, variableName, workspaceRoot, wasmBridge);
                 const frameChanged = resolved.frameId !== prevFrameId;
                 debug(`evaluateDapExpression: retry ${i + 1} — frameId ${prevFrameId}→${resolved.frameId} (${frameChanged ? 'CHANGED' : 'same'}), source=${resolved.sourcePath ?? '(no path)'}, line=${resolved.line}`);

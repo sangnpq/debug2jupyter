@@ -1,3 +1,5 @@
+.github/
+.opencode/
 src/
 test/
 tests/

@@ -13,6 +13,7 @@ export interface DebugVariableElement {
         name: string;
         value: string;
         variablesReference: number;
+        evaluateName?: string;
     };
     session: vscode.DebugSession;
 }
@@ -22,7 +23,7 @@ export async function handleSendToJupyter(
     wasmBridge: WasmBridge,
     context: vscode.ExtensionContext
 ): Promise<void> {
-    const varName = element.variable.name;
+    const varName = element.variable.evaluateName ?? element.variable.name;
     debug(`handleSendToJupyter: varName="${varName}", variablesReference=${element.variable.variablesReference}`);
 
     if (!varName || varName.trim() === '') {
@@ -70,12 +71,12 @@ export async function handleSendToJupyter(
                 debug(`handleSendToJupyter: frame resolved (frameId=${frameInfo.frameId}), about to evaluate dump expression`);
 
                 progress.report({ message: 'Dumping variable to pickle...' });
-                const tmpDir = path.join(workspaceRoot, '.vscode', 'tmp');
-                await fs.promises.mkdir(tmpDir, { recursive: true });
+                const storeDir = path.join(workspaceRoot, '.d2j_store');
+                await fs.promises.mkdir(storeDir, { recursive: true });
                 const pklFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${frameInfo.line ?? 0}_${varName}_${timestamp}.pkl`;
-                const pklPath = path.join(tmpDir, pklFileName);
+                const pklPath = path.join(storeDir, pklFileName);
                 const escapedPklPath = pklPath.replace(/'/g, "\\'");
-                const dumpExpr = `import joblib; joblib.dump(${varName}, r'${escapedPklPath}')`;
+                const dumpExpr = `import pickle; f=open('${escapedPklPath}', 'wb'); pickle.dump(${varName}, f); f.close()`;
                 debug(`handleSendToJupyter: evaluating dumpExpr="${dumpExpr}"`);
                 await evaluateDapExpression(activeSession, dumpExpr, frameInfo, varName, workspaceRoot, wasmBridge);
                 debug(`handleSendToJupyter: dump succeeded, pklPath=${pklPath}`);
@@ -84,10 +85,8 @@ export async function handleSendToJupyter(
                 const notebookJson = wasmBridge.generateNotebook(varName, pklPath, pyEnv.venvName);
 
                 progress.report({ message: 'Writing notebook file...' });
-                const scriptsDir = path.join(workspaceRoot, '.vscode', 'scripts');
-                await fs.promises.mkdir(scriptsDir, { recursive: true });
                 const notebookFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${timestamp}.ipynb`;
-                const notebookPath = path.join(scriptsDir, notebookFileName);
+                const notebookPath = path.join(storeDir, notebookFileName);
                 await writeAndOpenNotebook(notebookJson, notebookPath);
                 debug(`handleSendToJupyter: notebook written to ${notebookPath}`);
             }

@@ -53,6 +53,69 @@ Press **F5** in VS Code to launch the Extension Development Host. Set breakpoint
 6. A notebook file (e.g., `src_main_20260529120000.ipynb`) is created in `.vscode/scripts/` and opened automatically
 7. The load cell executes automatically, deserializing your variable with `joblib.load()`
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    VS Code Extension Host                    │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
+│  │  extension   │───▶│   commands   │───▶│  wasmBridge  │  │
+│  │  .ts         │    │  .ts         │    │  .ts         │  │
+│  └──────────────┘    └──────┬───────┘    └──────────────┘  │
+│                            │                    │           │
+│                     ┌──────▼───────┐           │           │
+│                     │  pythonEnv   │    ┌──────▼──────┐    │
+│                     │  .ts         │    │  dapClient  │    │
+│                     └──────────────┘    │  .ts         │    │
+│                                        └──────────────┘    │
+│                                                    │       │
+│  ┌──────────────────┐  ┌────────────────────────▼──────┐│
+│  │    pkg/  (wasm-pack)     │   notebookWriter.ts          ││
+│  │  debug_to_jupyter_rust   │   logger.ts                  ││
+│  │  .js + .wasm            │   utils.ts                   ││
+│  └──────────────────────────┘  └─────────────────────────────┘│
+│                                                            │
+│  ┌──────────────────────────┐  ┌──────────────────────────┐ │
+│  │    .vscode/tmp/          │  │   outputChannel/           │ │
+│  │   {var}.pkl             │  │   D2J.log                  │ │
+│  └──────────────────────────┘  └──────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Workflow
+
+1. User right-clicks a variable in the Debug Variables panel
+2. `commands.ts` intercepts the click, extracts `varName` from `element.variable.name`
+3. `pythonEnv.ts` resolves the active Python interpreter path and venv name via `ms-python.python` API
+4. `pythonEnv.ts` checks/installs `joblib` and `ipykernel`, registers the kernel
+5. `dapClient.ts` sends a DAP `evaluate` request: `joblib.dump(varName, path)` — executes in the debugged Python process
+6. `wasmBridge.ts` calls the Rust/Wasm engine for notebook generation
+7. `notebookWriter.ts` writes the `.ipynb` file to the workspace and opens it
+
+### TypeScript Modules (9 modules)
+
+| Module | Responsibility |
+|---|---|
+| `src/extension.ts` | Entry point: activate/deactivate, register command |
+| `src/commands.ts` | Orchestrates full workflow with `vscode.window.withProgress` |
+| `src/dapClient.ts` | DAP evaluate with stale frame detection and retry logic |
+| `src/pythonEnv.ts` | Python environment detection, package installation |
+| `src/wasmBridge.ts` | Load and call Rust/Wasm functions |
+| `src/notebookWriter.ts` | Write and open notebook files |
+| `src/utils.ts` | Path sanitization and timestamp formatting |
+| `src/logger.ts` | Output channel logging with configurable levels |
+| `src/errors.ts` | `D2JError` class with typed error kinds |
+
+### Rust Wasm Module (`cargo/src/lib.rs`)
+
+| Function | Purpose |
+|---|---|
+| `generate_jupyter_notebook()` | Generate nbformat 4.5 notebook JSON |
+| `rank_thread_candidates()` | Score and sort thread frames by relevance |
+| `is_virtual_source_wasm()` | Detect virtual sources like `<string>`, `<stdin>` |
+| `sanitize_source_path_fn()` | Convert file paths to safe notebook filenames |
+| `format_timestamp_fn()` | Generate YYYYMMDDHHMMSS timestamps |
+
 ## Building
 
 | Command | Description |
@@ -104,6 +167,18 @@ Run `npm run build:wasm` to rebuild the Rust → WebAssembly module. Make sure `
 
 **Stale frame errors**
 The extension automatically retries with exponential backoff (up to 10 attempts). If it still fails, try stepping one line in the debugger before retrying.
+
+## Error Catalog
+
+| Kind | Condition | User Message |
+|---|---|---|
+| `noWorkspace` | No workspace folder open | "No workspace is open. Please open a folder before using D2J." |
+| `noDebugSession` | No active debug session | "No active debug session. Start debugging first." |
+| `noDebugThread` | No threads found | "No threads found in debug session. Please ensure the debugger is running." |
+| `noDebugStackFrame` | No stack frames found | "No stack frames found in debug session. Please ensure the debugger is paused." |
+| `noPythonEnv` | Could not detect Python env | "Could not detect a Python environment. Select a interpreter." |
+| `pipInstallFailed` | pip install failed | Full error + manual pip command |
+| `invalidVariable` | Variable name empty | "Invalid variable selected." |
 
 ## License
 

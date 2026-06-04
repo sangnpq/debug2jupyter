@@ -86,9 +86,10 @@ pub fn generate_jupyter_notebook(var_name: &str, pkl_path: &str, venv_name: &str
                 "metadata": {},
                 "outputs": [],
                 "source": [
-                    "import joblib\n",
-                    format!("{} = joblib.load('{}')\n", var_name, escaped_pkl_path),
-                    format!("{}.style.set_properties(**{{'white-space': 'nowrap'}})\n", var_name)
+                    "import pickle\n",
+                    format!("with open('{}', 'rb') as f:\n", escaped_pkl_path),
+                    format!("    {} = pickle.load(f)\n", var_name),
+                    format!("print(f'Successfully loaded live variable: {}')\n", var_name)
                 ]
             }
         ]

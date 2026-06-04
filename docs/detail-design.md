@@ -1,96 +1,48 @@
-# Detailed Design: Debug to Jupyter (D2J)
+# Detailed Design Specification: Debug to Jupyter (D2J)
 
-## Overview
+## 1. Architecture & Data Flow
 
-D2J is a VS Code extension that exports a live Python variable from an active debug session into a Jupyter Notebook (.ipynb), configured to use the same `.venv` as the debugged script.
-
-**Repository:** The project root is the extension root (`memory2jupyter/`).
-
-**Extension ID:** `debug-to-jupyter-rust`
-**Activation:** `"onDebug"` (when any debug session starts)
-**Primary Command:** `d2j.sendToJupyter` — triggered from right-click context menu on Debug Variables panel
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        VS Code Extension Host                          │
+│  ┌──────────────┐      ┌──────────────┐      ┌──────────────────────┐  │
+│  │  extension   │─────▶│   commands   │─────▶│      wasmBridge      │  │
+│  │  .ts         │      │  .ts         │      │      .ts             │  │
+│  └──────────────┘      └──────┬───────┘      └──────────────────────┘  │
+│                               │                          │             │
+│                        ┌──────▼───────┐           ┌──────▼──────┐      │
+│                        │  pythonEnv   │           │  dapClient  │      │
+│                        │  .ts         │           │  .ts         │      │
+│                        └──────────────┘           └──────┬──────┘      │
+│                                                          │             │
+│  ┌─────────────────────────┐                             │             │
+│  │     pkg/ (wasm-pack)    │◄────────────────────────────┘             │
+│  │ debug_to_jupyter_rust   │    ┌─────────────────────────────────────┐│
+│  │ .js + .wasm             │    │ notebookWriter.ts  /  logger.ts     ││
+│  └─────────────────────────┘    │ errors.ts          /  utils.ts      ││
+│                                 └─────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## Architecture
+## 2. Rust Wasm Module (`cargo/src/lib.rs`)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    VS Code Extension Host                    │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │  extension   │───▶│   commands   │───▶│  wasmBridge  │  │
-│  │  .ts         │    │  .ts         │    │  .ts         │  │
-│  └──────────────┘    └──────┬───────┘    └──────────────┘  │
-│                            │                    │           │
-│                     ┌──────▼───────┐           │           │
-│                     │  pythonEnv   │    ┌──────▼──────┐    │
-│                     │  .ts         │    │  dapClient  │    │
-│                     └──────────────┘    │  .ts         │    │
-│                                        └──────────────┘    │
-│                                                    │       │
-│  ┌──────────────────┐  ┌──────────────────────────▼──────┐│
-│  │    pkg/  (wasm-pack)     │   notebookWriter.ts          ││
-│  │  debug_to_jupyter_rust   │   pathUtils.ts              ││
-│  │  .js + .wasm            │   logger.ts                  ││
-│  └──────────────────────────┘  └─────────────────────────────┘│
-│                                                            │
-│  ┌──────────────────────────┐  ┌──────────────────────────┐ │
-│  │    globalStorageUri/     │  │   outputChannel/          │ │
-│  │   D2J_{varName}.ipynb   │  │   D2J.log                 │ │
-│  └──────────────────────────┘  └──────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
+The Rust component acts as a high-performance, synchronous data processor. It takes responsibility for generating structured Jupyter Notebook JSON objects and executing heavy filtering algorithms across multiple debug threads.
 
-### Workflow
+### Exposed Functions
 
-1. User right-clicks a variable in the Debug Variables panel
-2. `commands.ts` intercepts the click, extracts `varName` from `element.variable.name`
-3. `pythonEnv.ts` resolves the active Python interpreter path and venv name via `ms-python.python` API
-4. `pythonEnv.ts` checks/installs `joblib` and `ipykernel`, registers the kernel
-5. `dapClient.ts` sends a DAP `evaluate` request: `joblib.dump(varName, path)` — executes in the debugged Python process
-6. `wasmBridge.ts` calls the Rust/Wasm engine, passing varName, pklPath, venvName
-7. `notebookWriter.ts` writes the `.ipynb` file to the workspace and opens it
-
----
-
-## Build System
-
-### No Bundler
-VS Code's extension host loads CommonJS directly from `out/`. No esbuild/webpack needed for v1. A bundler can be added later for VSIX size optimization.
-
-### Build Order (DAG)
-
-```
-wasm-pack build  (cargo → pkg/)
-        │
-        ▼
-tsc -p tsconfig.json  (src/*.ts → out/*.js)
-        │
-        ▼
-vsce package  (out/ + pkg/ + package.json → *.vsix)
-```
-
-### npm Scripts
-
-| Script | Command | Purpose |
+| Function | Signature | Purpose |
 |---|---|---|
-| `build:wasm` | `cd cargo && wasm-pack build --target nodejs --out-dir ../pkg --release` | Compile Rust to Wasm |
-| `build:ts` | `tsc -p tsconfig.json` | Compile TypeScript |
-| `build` | `npm run build:wasm && npm run build:ts` | Full build |
-| `watch:ts` | `tsc -p tsconfig.json --watch` | Watch mode |
-| `package` | `npm run build && vsce package` | Build .vsix |
+| `generate_jupyter_notebook` | `(var_name: String, pkl_path: String, venv_name: String) -> String` | Produces `nbformat 4.5` notebook JSON utilizing Python's built-in `pickle` module. |
+| `rank_thread_candidates` | `(candidates_json: String, workspace_root: String) -> String` | Ranks available frames by relevance, returning a `RankedFrame[]` JSON array. |
+| `is_virtual_source_wasm` | `(source_json: String) -> String` | Evaluates if a frame's source is virtual (e.g., `<string>`), returning `{"isVirtual": bool}`. |
+| `sanitize_source_path_fn` | `(source_path: String, workspace_root: String) -> String` | Canonicalizes paths into safe, non-colliding file names. |
+| `format_timestamp_fn` | `() -> String` | Yields a compressed timestamp string (`YYYYMMDDHHMMSS`). |
 
-`wasm-pack --target nodejs` is critical — it generates CommonJS-compatible JS glue with `require()` that works in VS Code's Node.js extension host. `wasm-pack --target web` or `--target bundler` would not work.
+### `generate_jupyter_notebook` Native Output Template
 
----
-
-## Rust Wasm Module (`cargo/src/lib.rs`)
-
-### `generate_jupyter_notebook(var_name, pkl_path, venv_name) -> String`
-
-**Responsibility:** Given a variable name, pickle file path, and venv name, produce a valid nbformat 4.5 Jupyter Notebook JSON string.
-
-### nbformat 4.5 JSON Structure
+The JSON generated by the WebAssembly module uses standard Python `pickle` to bypass third-party library dependencies (`joblib`) entirely:
 
 ```json
 {
@@ -102,288 +54,164 @@ vsce package  (out/ + pkg/ + package.json → *.vsix)
       "name": "python3_{sanitized-venv-name}"
     },
     "language_info": {
-      "name": "python",
-      "codemirror_mode": {"name": "ipython", "version": 3},
-      "file_extension": ".py",
-      "mimetype": "text/x-python",
-      "pygments_lexer": "python3"
+      "name": "python"
     }
   },
   "cells": [
-    {
-      "cell_type": "markdown",
-      "id": "d2j-header",
-      "metadata": {},
-      "source": ["# Debug to Jupyter Export\n", "\n", "Variable: `{var_name}`\n"]
-    },
-    {
-      "cell_type": "code",
-      "execution_count": null,
-      "id": "d2j-load",
-      "metadata": {},
-      "outputs": [],
+    { 
+      "cell_type": "markdown", 
+      "id": "d2j-header", 
       "source": [
-        "import joblib\n",
-        "{var_name} = joblib.load('{escaped-pkl-path}')\n",
-        "print(f'Loaded {type(var_name).__name__}: {var_name}')\n"
-      ]
+        "# D2J Live Variable Export\n", 
+        "Variable exported from debug session: `{var_name}`\n"
+      ] 
+    },
+    { 
+      "cell_type": "code", 
+      "id": "d2j-load", 
+      "source": [
+        "import pickle\n",
+        "with open('{escaped-pkl-path}', 'rb') as f:\n",
+        "    {var_name} = pickle.load(f)\n",
+        "print(f'Successfully loaded live variable: {var_name}')\n"
+      ] 
     }
   ]
 }
 ```
 
-### Validation & Normalization
+### Path & Input Validation Rules
 
-| Step | Logic |
+* **Empty Checks:** Triggers strict validations (`EmptyVarName`, `EmptyPklPath`, `EmptyVenvName`).
+* **Path Canonicalization:** All backward slashes (`\`) on Windows paths are unified to forward slashes (`/`) prior to formatting into the Python raw template block.
+* **Escaping Quirks:** Single quotes (`'`) embedded within the target file path are strictly escaped as `\'`.
+* **Kernel Name Sanitization:** `venv_name` → lowercase → non-alphanumeric characters replaced with `-` → stripped leading/trailing dashes.
+
+### Thread Scoring Heuristics (`compute_score`)
+
+When matching frames across complex multi-threaded executions, the Wasm module scores frame candidates using the following parameters:
+
+| Factor | Score Delta |
 |---|---|
-| Empty `var_name` | Return error JSON: `{"error": "...", "kind": "EmptyVarName"}` |
-| Empty `pkl_path` | Return error JSON: `{"error": "...", "kind": "EmptyPklPath"}` |
-| Empty `venv_name` | Return error JSON: `{"error": "...", "kind": "EmptyVenvName"}` |
-| Windows path | Replace `\` with `/` before embedding in Python string |
-| Single quotes in path | Escape as `\'` in the Python code |
-| Kernel name sanitization | `venv_name` → lowercase, non-alphanumeric chars → `-`, trim leading/trailing `-` |
+| Virtual source execution (e.g., `<string>`, `<eval>`) | +1000 |
+| Target source resides entirely outside the workspace | +200 |
+| Target source resides inside global `site-packages` | +100 |
+| Target source is native to the current workspace | +0 |
+| Target context explicitly contains the active variable | -500 |
+| Thread identifier string contains `"main"` | -50 |
+| Background/Daemon thread pattern matched (e.g., worker, pool) | +200 |
 
-### Testing
+---
 
-Rust unit tests run natively with `cargo test` (no Wasm needed):
+## 3. TypeScript Core Modules
 
+### `src/extension.ts`
+
+```typescript
+export async function activate(context: vscode.ExtensionContext): Promise<void>;
+export function deactivate(): void;
 ```
-test_generate_notebook_basic
-test_empty_var_name_returns_error
-test_empty_pkl_path_returns_error
-test_empty_venv_name_returns_error
-test_windows_path_normalization       # \ → / in generated Python code
-test_sanitize_id                    # special chars → hyphens
-test_kernel_name_format             # python3-{venv} pattern
-test_cell_ids_valid                 # IDs match ^[a-zA-Z0-9-_]+$
-test_single_quotes_in_path           # paths with ' are escaped
+* Serves as the lazy-loaded core entry point.
+* Instantiates global instances of `Logger` and `WasmBridge`.
+* Registers the explicit context-menu command `d2j.sendToJupyter`.
+
+### `src/commands.ts`
+
+Orchestrates the transactional execution loop of `handleSendToJupyter(element, wasmBridge, context)`:
+1.  **Extract Expression:** Extract the exact variable reference by preferring `element.variable.evaluateName` over `element.variable.name` to handle nested object/list structures correctly.
+2.  **Isolate Workspace Store:** Initialize a hidden local data directory named `.d2j_store/` within the root directory of the current workspace.
+3.  **Sanitize Git State:** Invoke `utils.ensureGitIgnore` to safeguard the repository against binary variable tracking.
+4.  **Resolve Active Execution Env:** Extract the running Python interpreter and confirm `ipykernel` readiness.
+5.  **DAP Evaluation:** Force the target debugger process to execute atomic serialization onto the disk storage.
+6.  **Construct Notebook Document:** Dispatch data coordinates to `wasmBridge` to assemble the notebook layout synchronously.
+7.  **Mount Document Frame:** Handoff output structures to `notebookWriter` to render the interactive UI.
+
+### `src/dapClient.ts`
+
+Manages low-level communications with the active VS Code Debug Session via the Debug Adapter Protocol (DAP).
+
+* `resolveCurrentFrameId(...)`: Queries active execution frames across concurrent threads. If `wasmBridge` is fully initialized, it passes frame tables into `rankThreadCandidates` to surface logical execution contexts.
+* `evaluateDapExpression(session, pklPath, evalName, ...)`: Directs the active interpreter to dump execution artifacts into the `.d2j_store/` partition. It uses the `repl` context for evaluation to enable side-effects:
+    ```typescript
+    const escapedPath = pklPath.replace(/\\/g, '/');
+    const expression = `import pickle; f=open('${escapedPath}', 'wb'); pickle.dump(${evalName}, f); f.close()`;
+    ```
+* **Resiliency Matrix:** Implements an exponential backoff loop (base latency: `100ms`, maximum threshold: `10` iterations) to survive transient network locks or paused thread delays.
+
+### `src/pythonEnv.ts`
+
+Interacts directly with the official Microsoft Python extension (`ms-python.python`) to resolve development environments.
+
+* `resolvePythonEnvironment()`: Leverages `api.environments.getActiveEnvironmentPath()` to extract active virtual environment settings, falling back safely to global system paths if undefined.
+* `ensurePythonPackages(pythonPath)`:
+    1.  Verifies package presence non-destructively: `python -c "import ipykernel"`.
+    2.  If missing, halts automated scripts to prompt the user for explicit consent (`vscode.window.showInformationMessage`).
+    3.  If consent is given, executes isolated installation procedures utilizing `uv pip install ipykernel`, falling back automatically to traditional `python -m pip install ipykernel` if `uv` is absent.
+    4.  Registers a dedicated local user-kernel instance: `python -m ipykernel install --user --name=python3_{sanitized}`.
+
+### `src/wasmBridge.ts`
+
+```typescript
+class WasmBridge {
+    async initialize(): Promise<void>;
+    generateNotebook(varName: string, pklPath: string, venvName: string): string;
+    rankThreadCandidates(candidates: unknown[], workspaceRoot: string): RankedFrame[];
+    isVirtualSource(source: object): boolean;
+    sanitizeSourcePath(sourcePath: string, workspaceRoot: string): string;
+    formatTimestamp(): string;
+}
+```
+* Initializes the compiled asset mapping pointing directly to `./pkg/debug_to_jupyter_rust.js`.
+* Acts as a bridge wrapper, marshaling JavaScript string objects directly into the linear memory boundary of the WebAssembly runtime.
+
+### `src/notebookWriter.ts`
+
+Responsible for writing data payload configurations out to the storage layers and mounting native editor frames.
+
+```typescript
+async function writeAndOpenNotebook(notebookJson: string, targetDirectory: string): Promise<void>
+```
+1.  Generates a time-stamped target file path: `.d2j_store/d2j_export_{timestamp}.ipynb`.
+2.  Writes the generated raw JSON structure to the file system using `vscode.workspace.fs`.
+3.  Mounts the target layout natively via internal system handlers:
+    ```typescript
+    const notebookDoc = await vscode.workspace.openNotebookDocument(vscode.Uri.file(outputPath));
+    await vscode.window.showNotebookDocument(notebookDoc);
+    ```
+4.  Triggers programmatic cell execution commands to evaluate the kernel mapping immediately.
+
+### `src/utils.ts`
+
+Contains file management helpers and git safety utilities.
+
+```typescript
+import * as fs from 'fs';
+import * as path from 'path';
+
+export function ensureGitIgnore(workspaceRoot: string): void {
+    const gitIgnorePath = path.join(workspaceRoot, '.gitignore');
+    const ignoreRule = '\n# D2J Temporary Data Storage\n.d2j_store/\n';
+    
+    if (!fs.existsSync(gitIgnorePath)) {
+        fs.writeFileSync(gitIgnorePath, ignoreRule);
+        return;
+    }
+    const content = fs.readFileSync(gitIgnorePath, 'utf8');
+    if (!content.includes('.d2j_store/')) {
+        fs.appendFileSync(gitIgnorePath, ignoreRule);
+    }
+}
 ```
 
 ---
 
-## TypeScript Modules (8 modules)
+## 4. `package.json` Manifest Configuration
 
-### `src/extension.ts` — Entry Point
-
-```typescript
-export async function activate(context: vscode.ExtensionContext) {
-    const wasmBridge = new WasmBridge(context);
-    await wasmBridge.initialize();
-    const disposable = vscode.commands.registerCommand('d2j.sendToJupyter', handleSendToJupyter);
-    context.subscriptions.push(disposable);
-}
-
-export function deactivate() {}  // no-op
-```
-
-### `src/commands.ts` — Orchestration
-
-```typescript
-export async function handleSendToJupyter(element, wasmBridge, context) {
-    // 1. Validate preconditions
-    // 2. Resolve Python environment
-    // 3. Ensure joblib + ipykernel
-    // 4. DAP evaluate → dump to .pkl
-    // 5. Generate notebook via Wasm
-    // 6. Write and open notebook
-    // All wrapped in vscode.window.withProgress for UX
-}
-```
-
-`element` comes from the `view/item/context` menu on `debugVariables`:
-
-```typescript
-interface DebugVariableElement {
-    variable: { name: string; value: string; variablesReference: number };
-    session: vscode.DebugSession;
-}
-```
-
-### `src/dapClient.ts` — Debug Adapter Protocol
-
-```typescript
-export async function evaluateDapExpression(
-    session: vscode.DebugSession,
-    expression: string,
-    frameId?: number
-): Promise<string> {
-    const args: vscode.DebugProtocol.EvaluateArguments = {
-        expression,
-        context: 'repl',  // critical: enables side-effecting expressions in debugpy
-    };
-    if (frameId !== undefined) args.frameId = frameId;
-    const response = await session.customRequest('evaluate', args);
-    return response.body.result;
-}
-```
-
-**DAP detail:** `context: 'repl'` is required for side-effecting evaluate expressions (like `joblib.dump`). Without it, some debug adapters refuse to run code with side effects. Debugpy (the standard Python debug adapter) supports this.
-
-### `src/pythonEnv.ts` — Python Environment
-
-```typescript
-export async function resolvePythonEnvironment(): Promise<PythonEnvironment | undefined>
-// Resolves via ms-python.python API.
-// Preferred: api.environments.getActiveEnvironmentPath() → resolveEnvironment()
-// Fallback: api.settings.getExecutionDetails()
-
-export async function ensurePythonPackages(pythonPath: string): Promise<void>
-// Step 1: python -c "import joblib, ipykernel" → if fails:
-// Step 2: python -m pip install joblib ipykernel  (120s timeout)
-// Step 3: python -m ipykernel install --user --name=...  (30s timeout) — non-fatal
-```
-
-**venv name extraction** from Python executable path:
-- Look for `.venv`, `env`, or `venv` directory in the path
-- Fall back to the parent directory of `bin/` or `Scripts/`
-
-### `src/wasmBridge.ts` — Wasm Loading
-
-```typescript
-export class WasmBridge {
-    async initialize(): Promise<void>
-    // require() the pkg/ JS glue (synchronous with --target nodejs)
-
-    generateNotebook(varName: string, pklPath: string, venvName: string): string
-    // Call wasm function, parse result. If {"error":...}, throw.
-}
-```
-
-**Important:** Using `--target nodejs` means the `require()` call in `initialize()` synchronously compiles and instantiates the Wasm module. No async memory initialization is needed. This is a key difference from `--target web`.
-
-### `src/notebookWriter.ts` — Notebook File Operations
-
-```typescript
-export async function writeAndOpenNotebook(
-    notebookJson: string,
-    varName: string,
-    workspaceRoot: string
-): Promise<void>
-// 1. Ensure globalStorageUri directory exists (vscode.workspace.fs.createDirectory)
-// 2. Write to workspaceRoot/D2J_{varName}.ipynb
-// 3. Open with vscode.openWith(uri, 'jupyter-notebook')
-// 4. Show success message
-```
-
-### `src/errors.ts` — Error Handling
-
-```typescript
-export class D2JError extends Error {
-    constructor(
-        public readonly kind: string,
-        message: string,
-        public readonly severity: vscode.MessageSeverity = vscode.MessageSeverity.Error
-    )
-}
-
-export function showError(err: unknown): void
-// Map D2JError.kind → user-friendly message → vscode.window.showErrorMessage
-```
-
-### `src/logger.ts` — Logging
-
-```typescript
-export function initLogger(context: vscode.ExtensionContext): void
-// Creates an OutputChannel named 'D2J' and registers it for disposal
-
-export function log(msg: string): void
-// Appends a timestamped line to the D2J output channel
-
-export function showOutput(): void
-// Reveals the output channel panel (true = preserve focus)
-```
-
-### `src/pathUtils.ts` — Path Utilities
-
-```typescript
-export function sanitizeSourcePath(sourcePath: string, workspaceRoot: string): string
-// Converts source file path to a safe variable name:
-// 1. Normalizes backslashes to forward slashes
-// 2. Computes relative path from workspace root
-// 3. If outside workspace, uses basename only
-// 4. Strips file extension
-// 5. Replaces unsafe chars with underscores
-
-export function formatTimestamp(): string
-// Returns: YYYYMMDDHHMMSS format for notebook filenames
-```
-
----
-
-## Error Catalog
-
-| Kind | Condition | Severity | User Message |
-|---|---|---|---|
-| `noWorkspace` | No workspace folder open | Error | "No workspace is open. Please open a folder before using D2J." |
-| `noDebugSession` | No active debug session | Error | "No active debug session. Start debugging first." |
-| `pythonExtNotInstalled` | `ms-python.python` not found | Error | "The Python extension is required. Install it from the marketplace." |
-| `noPythonEnv` | Python ext found but no interpreter | Error | "Could not detect a Python environment. Select a interpreter." |
-| `pipInstallFailed` | `pip install joblib ipykernel` fails | Error | Full error + manual pip command |
-| `dapEvaluateFailed` | DAP evaluate returns error | Error | "Failed to dump variable. It may not support serialization." |
-| `dapSessionLost` | Debug session ends mid-evaluation | Error | "Debug session ended while dumping the variable." |
-| `wasmLoadFailed` | `require('pkg/...')` throws | Error | "Failed to load notebook generator. Try reinstalling." |
-| `wasmGenerateError` | Rust returns error JSON | Error | Propagated from Rust with kind and message |
-| `fileWriteFailed` | `fs.writeFile` rejects | Error | "Failed to write notebook. Check workspace permissions." |
-| `kernelRegFailed` | `ipykernel install` fails | Warning | "Could not register kernel. Select one manually." |
-| `invalidVariable` | Variable name empty/invalid | Error | "Invalid variable selected." |
-
----
-
-## Cross-Platform Path Handling
-
-| Context | Approach |
-|---|---|
-| DAP evaluate (Python code) | `r'C:/path/to/file.pkl'` — Python raw strings, forward slashes work on all platforms |
-| Rust Wasm (Python string in JSON) | Normalize `\` to `/` inside Rust before embedding |
-| Node.js `fs` operations | Always `path.join()` or `vscode.Uri.joinPath()` |
-| Shell commands in `execFile` | Wrap Python path in double quotes: `"${pythonPath}" -m pip ...` |
-
----
-
-## package.json Details
+The configuration decouples from eager `onDebug` bindings to prevent startup performance regressions. The extension remains dormant until a user explicitly interacts with the designated context menu item.
 
 ```json
 {
   "name": "debug-to-jupyter-rust",
   "displayName": "Debug to Jupyter (Rust Wasm)",
   "version": "1.0.0",
-  "publisher": "your-name",
-  "engines": { "vscode": "^1.75.0" },
-  "activationEvents": ["onDebug"],
-  "main": "./out/extension.js",
-  "extensionDependencies": ["ms-python.python"],
-  "contributes": {
-    "commands": [
-      {
-        "command": "d2j.sendToJupyter",
-        "title": "Gửi sang Jupyter Notebook",
-        "category": "Debug"
-      }
-    ],
-    "menus": {
-      "view/item/context": [
-        {
-          "command": "d2j.sendToJupyter",
-          "when": "view == debugVariables",
-          "group": "inline"
-        }
-      ]
-    }
-  },
-  "files": ["out/**", "pkg/**"]
-}
-```
-
-**`extensionDependencies`** ensures VS Code auto-prompts the user to install `ms-python.python` if it's missing — no need for manual version checks.
-
----
-
-## Key Risks & Mitigations
-
-| Risk | Mitigation |
-|---|---|
-| wasm-pack Node.js ABI mismatch | `--target nodejs` produces pure `.wasm` with standard WebAssembly API — no native addon ABI |
-| DAP evaluate side effects blocked | Use `context: 'repl'` — debugpy supports this. Fall back to no context if it fails. |
-| Large variable serialization hangs | Progress notification keeps user informed. Document in README. |
-| globalStorageUri not a file URI | Create dir with `vscode.workspace.fs.createDirectory()` before writing |
-| Repeated quick invocations | `joblib.dump` serialized by debug session's single-threaded eval; `writeFile` overwrites — acceptable |
+  "publisher": "sangnpq

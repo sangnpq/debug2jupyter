@@ -3,7 +3,6 @@ import * as path from 'path';
 export function sanitizeSourcePath(sourcePath: string, workspaceRoot: string): string {
     const normalizedSource = sourcePath.replace(/\\/g, '/');
     const normalizedRoot = workspaceRoot.replace(/\\/g, '/');
-
     const relative = path.posix.relative(normalizedRoot, normalizedSource);
 
     let result: string;
@@ -13,15 +12,11 @@ export function sanitizeSourcePath(sourcePath: string, workspaceRoot: string): s
         result = relative.replace(/[/\\]/g, '_');
     }
 
-    // Strip extension
     const ext = path.posix.extname(result);
     if (ext) {
         result = result.slice(0, -ext.length);
     }
-
-    // Replace any remaining unsafe characters
     result = result.replace(/[^a-zA-Z0-9_.-]/g, '_');
-
     return result;
 }
 

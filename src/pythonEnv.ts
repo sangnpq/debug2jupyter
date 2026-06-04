@@ -1,7 +1,10 @@
 import * as vscode from 'vscode';
 import { execFile } from 'child_process';
+import { promisify } from 'util';
 import * as path from 'path';
 import { D2JError } from './errors';
+
+const execAsync = promisify(execFile);
 
 export interface PythonEnvironment {
     pythonPath: string;
@@ -73,32 +76,30 @@ function extractVenvFolder(pythonPath: string): string {
     return path.dirname(pythonPath);
 }
 
-function execAsync(command: string, args: string[], options: { timeout: number }): Promise<string> {
-    return new Promise((resolve, reject) => {
-        execFile(command, args, { timeout: options.timeout }, (error, stdout, stderr) => {
-            if (error) { reject(error); }
-            else { resolve(stdout); }
-        });
-    });
-}
-
 export async function ensurePythonPackages(pythonPath: string): Promise<void> {
     try {
-        await execAsync(pythonPath, ['-c', 'import joblib, ipykernel'], { timeout: 10000 });
+        await execAsync(pythonPath, ['-c', 'import ipykernel'], { timeout: 10000 });
         return;
     } catch {
-        // At least one is missing; install both
+    }
+
+    const consent = await vscode.window.showInformationMessage(
+        'D2J: ipykernel is required for Jupyter notebook export. Install it now?',
+        'Install',
+        'Cancel'
+    );
+    if (consent !== 'Install') {
+        throw new D2JError('pipInstallFailed', 'User declined ipykernel installation.');
     }
 
     try {
-        await execAsync(pythonPath, ['-m', 'pip', 'install', 'joblib', 'ipykernel'], { timeout: 120000 });
+        await execAsync('uv', ['pip', 'install', '--python', pythonPath, 'ipykernel'], { timeout: 120000 });
     } catch {
-        // pip may not be available (e.g. uv-managed venv); try uv as fallback
         try {
-            await execAsync('uv', ['pip', 'install', '--python', pythonPath, 'joblib', 'ipykernel'], { timeout: 120000 });
+            await execAsync(pythonPath, ['-m', 'pip', 'install', 'ipykernel'], { timeout: 120000 });
         } catch (uvInstallErr) {
             throw new D2JError('pipInstallFailed',
-                `Failed to install joblib/ipykernel. Run manually: "${pythonPath}" -m pip install joblib ipykernel  OR  uv pip install --python "${pythonPath}" joblib ipykernel`
+                `Failed to install ipykernel. Run manually: "${pythonPath}" -m pip install ipykernel  OR  uv pip install --python "${pythonPath}" ipykernel`
             );
         }
     }
@@ -112,7 +113,6 @@ export async function ensurePythonPackages(pythonPath: string): Promise<void> {
             { timeout: 30000 }
         );
     } catch {
-        // Non-fatal; warn but proceed
     }
 }
 

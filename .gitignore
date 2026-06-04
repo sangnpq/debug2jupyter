@@ -2,4 +2,7 @@ node_modules/
 out/
 pkg/
 target/
+tests/.d2j_store
+tests/.venv
+tests/.vscode
 *.vsix
