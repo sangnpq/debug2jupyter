@@ -48,7 +48,7 @@
   "scripts": {
     "build:wasm": "cd cargo && ~/.cargo/bin/wasm-pack build --target nodejs --out-dir ../pkg --release",
     "build:wasm:dev": "cd cargo && ~/.cargo/bin/wasm-pack build --target nodejs --out-dir ../pkg --dev",
-    "build:ts": "tsc -p tsconfig.json",
+    "build:ts": "tsc -p tsconfig.json && cp src/wasmWorker.js out/wasmWorker.js",
     "build": "npm run build:wasm && npm run build:ts",
     "watch:ts": "tsc -p tsconfig.json --watch",
     "package": "npm run build && vsce package",

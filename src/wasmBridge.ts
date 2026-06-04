@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { Worker } from 'worker_threads';
 
 export interface RankedFrame {
     thread_id: number;
@@ -11,69 +12,104 @@ export interface RankedFrame {
 }
 
 export class WasmBridge {
-    private generateNotebookFn: ((varName: string, pklPath: string, venvName: string) => string) | undefined;
-    private rankThreadCandidatesFn: ((candidatesJson: string, workspaceRoot: string) => string) | undefined;
-    private isVirtualSourceFn: ((sourceJson: string) => string) | undefined;
-    private sanitizeSourcePathFn: ((sourcePath: string, workspaceRoot: string) => string) | undefined;
-    private formatTimestampFn: (() => string) | undefined;
+    private worker: Worker | null = null;
+    private messageCounter = 0;
+    private startupError: string | null = null;
 
     constructor(private context: vscode.ExtensionContext) {}
 
     async initialize(): Promise<void> {
         try {
+            if (this.worker) return;
             const extensionPath = this.context.extensionPath;
-            const wasmModule = require(path.join(extensionPath, 'pkg', 'debug_to_jupyter_rust.js'));
-            this.generateNotebookFn = wasmModule.generate_jupyter_notebook;
-            this.rankThreadCandidatesFn = wasmModule.rank_thread_candidates;
-            this.isVirtualSourceFn = wasmModule.is_virtual_source_wasm;
-            this.sanitizeSourcePathFn = wasmModule.sanitize_source_path_fn;
-            this.formatTimestampFn = wasmModule.format_timestamp_fn;
-        } catch (err) {
-            vscode.window.showErrorMessage(`Failed to load Wasm module: ${err}`);
+            const workerPath = path.join(extensionPath, 'out', 'wasmWorker.js');
+            this.worker = new Worker(workerPath);
+
+            // Capture explicit asynchronous boot exceptions sent from the thread channel
+            this.worker.on('message', (msg) => {
+                if (msg.id === 0 && msg.error) {
+                    this.startupError = msg.error;
+                }
+            });
+
+            this.worker.on('error', (err) => {
+                console.error('[WasmBridge] Worker lifecycle crash:', err);
+                this.startupError = err.message;
+            });
+
+            this.worker.on('exit', (code) => {
+                console.warn(`[WasmBridge] Worker thread exited with code: ${code}`);
+                this.worker = null;
+            });
+
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to initialize Wasm Worker: ${err}`);
             throw err;
         }
     }
 
-    generateNotebook(varName: string, pklPath: string, venvName: string): string {
-        if (!this.generateNotebookFn) {
-            throw new Error('Wasm module not initialized. Call initialize() first.');
-        }
-        const result = this.generateNotebookFn(varName, pklPath, venvName);
-        const parsed = JSON.parse(result);
-        if (parsed.error) {
-            throw new Error(`Notebook generation error (${parsed.kind}): ${parsed.error}`);
-        }
-        return result;
-    }
-
-    rankThreadCandidates(candidates: unknown[], workspaceRoot: string): RankedFrame[] {
-        if (!this.rankThreadCandidatesFn) {
-            throw new Error('Wasm module not initialized. Call initialize() first.');
-        }
-        const candidatesJson = JSON.stringify(candidates);
-        const result = this.rankThreadCandidatesFn(candidatesJson, workspaceRoot);
-        const parsed = JSON.parse(result);
-        if (parsed.error) {
-            throw new Error(`Rank thread candidates error (${parsed.kind}): ${parsed.error}`);
-        }
-        return parsed as RankedFrame[];
-    }
-
-    isVirtualSource(source: { path?: string; name?: string; sourceReference?: number }): boolean {
-        if (this.isVirtualSourceFn) {
-            const sourceJson = JSON.stringify({
-                path: source.path ?? null,
-                name: source.name ?? null,
-                source_reference: source.sourceReference ?? null,
-            });
-            const result = this.isVirtualSourceFn(sourceJson);
-            const parsed = JSON.parse(result);
-            if (parsed.error) {
-                return this.isVirtualSourceFallback(source);
+    private async callWorker<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+        if (!this.worker) {
+            if (this.startupError) {
+                throw new Error(`Wasm Worker crashed during startup: ${this.startupError}. Check your build directory layout.`);
             }
-            return parsed.is_virtual as boolean;
+            throw new Error('Wasm Worker not initialized or terminated unexpectedly.');
         }
-        return this.isVirtualSourceFallback(source);
+
+        return new Promise((resolve, reject) => {
+            const workerInstance = this.worker!;
+            const messageId = ++this.messageCounter;
+            const timeoutMs = 30000;
+            
+            const timeoutHandle = setTimeout(() => {
+                workerInstance.off('message', handleMessage);
+                reject(new Error(`Wasm callWorker timeout after ${timeoutMs}ms for action=${action}`));
+            }, timeoutMs);
+
+            const handleMessage = (msg: any) => {
+                if (msg.id === messageId) {
+                    clearTimeout(timeoutHandle);
+                    workerInstance.off('message', handleMessage);
+                    if (msg.error) reject(new Error(msg.error));
+                    else {
+                        try {
+                            const parsedData = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+                            resolve(parsedData);
+                        } catch (parseError: any) {
+                            reject(new Error(`D2J JSON Parse Error: ${parseError.message}`));
+                        }
+                    }
+                }
+            };
+
+            workerInstance.on('message', handleMessage);
+            workerInstance.postMessage({ id: messageId, action, ...payload });
+        });
+    }
+
+    async generateNotebook(varName: string, pklPath: string, venvName: string): Promise<string> {
+        const result = await this.callWorker<any>('generateNotebook', { varName, pklPath, venvName });
+        if (result && result.error) throw new Error(`Notebook generation error: ${result.error}`);
+        return typeof result === 'string' ? result : JSON.stringify(result);
+    }
+
+    async rankThreadCandidates(candidates: any[], workspaceRoot: string): Promise<any[]> {
+        return this.callWorker<any[]>('rankThreads', { candidates: JSON.stringify(candidates), workspaceRoot });
+    }
+
+    async isVirtualSource(source: { path?: string; name?: string; sourceReference?: number }): Promise<boolean> {
+        const sourceJson = JSON.stringify({
+            path: source.path ?? null,
+            name: source.name ?? null,
+            source_reference: source.sourceReference ?? null,
+        });
+        try {
+            const result = await this.callWorker<any>('isVirtualSource', { sourceJson });
+            if (result && result.error) return this.isVirtualSourceFallback(source);
+            return result.isVirtual as boolean;
+        } catch {
+            return this.isVirtualSourceFallback(source);
+        }
     }
 
     private isVirtualSourceFallback(source: { path?: string; name?: string; sourceReference?: number }): boolean {
@@ -83,46 +119,34 @@ export class WasmBridge {
         return false;
     }
 
-    sanitizeSourcePath(sourcePath: string, workspaceRoot: string): string {
-        if (!this.sanitizeSourcePathFn) {
+    async sanitizeSourcePath(sourcePath: string, workspaceRoot: string): Promise<string> {
+        try {
+            return await this.callWorker<string>('sanitizeSourcePath', { sourcePath, workspaceRoot });
+        } catch {
             return this.sanitizeSourcePathFallback(sourcePath, workspaceRoot);
         }
-        return this.sanitizeSourcePathFn(sourcePath, workspaceRoot);
     }
 
-    formatTimestamp(): string {
-        if (!this.formatTimestampFn) {
+    async formatTimestamp(): Promise<string> {
+        try {
+            return await this.callWorker<string>('formatTimestamp', {});
+        } catch {
             return this.formatTimestampFallback();
         }
-        return this.formatTimestampFn();
     }
 
     private sanitizeSourcePathFallback(sourcePath: string, workspaceRoot: string): string {
         const normalizedSource = sourcePath.replace(/\\/g, '/');
         const normalizedRoot = workspaceRoot.replace(/\\/g, '/');
         const relative = path.posix.relative(normalizedRoot, normalizedSource);
-        let result: string;
-        if (relative.startsWith('..') || path.isAbsolute(relative)) {
-            result = path.basename(sourcePath);
-        } else {
-            result = relative.replace(/[/\\]/g, '_');
-        }
+        let result = (relative.startsWith('..') || path.isAbsolute(relative)) ? path.basename(sourcePath) : relative.replace(/[/\\]/g, '_');
         const ext = path.posix.extname(result);
-        if (ext) {
-            result = result.slice(0, -ext.length);
-        }
-        result = result.replace(/[^a-zA-Z0-9_.-]/g, '_');
-        return result;
+        if (ext) result = result.slice(0, -ext.length);
+        return result.replace(/[^a-zA-Z0-9_.-]/g, '_');
     }
 
     private formatTimestampFallback(): string {
         const now = new Date();
-        const y = now.getFullYear().toString();
-        const mo = (now.getMonth() + 1).toString().padStart(2, '0');
-        const d = now.getDate().toString().padStart(2, '0');
-        const h = now.getHours().toString().padStart(2, '0');
-        const mi = now.getMinutes().toString().padStart(2, '0');
-        const s = now.getSeconds().toString().padStart(2, '0');
-        return `${y}${mo}${d}${h}${mi}${s}`;
+        return `${now.getFullYear()}${(now.getMonth() + 1).toString().padStart(2, '0')}${now.getDate().toString().padStart(2, '0')}${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}${now.getSeconds().toString().padStart(2, '0')}`;
     }
 }

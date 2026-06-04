@@ -2,56 +2,60 @@
 
 ## Overview
 
-D2J is a performance-optimized VS Code extension that exports live Python variables directly from an active debug session into a newly generated Jupyter Notebook (`.ipynb`). It configures the notebook to use the exact execution context and environment (`.venv`) as the debugged script.
+D2J is a high-performance, fault-tolerant VS Code extension that exports live Python variables from active, paused debug sessions directly into an automated Jupyter Notebook (`.ipynb`). It unifies execution environments by configuring the notebook to map directly onto the active process's target virtual environment (`.venv`).
 
 **Extension ID:** `debug-to-jupyter-rust`  
-**Activation:** Lazy-loaded (Zero-impact on standard debug sessions)  
+**Activation:** Lazy-loaded (Triggered purely via user context invocation)  
 **Command:** `d2j.sendToJupyter`  
 
 ## Tech Stack
 
-- **TypeScript** — VS Code Extension API orchestration and user interface lifecycle.
-- **Rust + WebAssembly** — High-performance, synchronous data-structure processing and notebook JSON structure generation via `wasm-pack`.
-- **Debug Adapter Protocol (DAP)** — Low-overhead runtime evaluation via `evaluate` requests to inspect stack traces and handle inline serialization.
-- **Python Runtime** — Standard library `pickle` module for dependency-free object serialization, combined with `ipykernel` for automated Jupyter kernel mounting.
+- **TypeScript** — High-concurrency orchestration using async event loops (`Promise.all`) to communicate with the VS Code Extension Host.
+- **Node.js Worker Threads** — Multi-threaded isolation layer preventing UI thread locking and managing asynchronous WebAssembly message resolution.
+- **Rust + WebAssembly** — Highly optimized, vectorized calculation engine compiled via `wasm-pack` running inside the background Worker context.
+- **Debug Adapter Protocol (DAP)** — Low-latency diagnostic pipeline handling concurrent process variable lookups.
+- **Python Runtime** — Standard library `pickle.Pickler` with a dynamic lifecycle override system for isolated, closure-safe data serialization.
 
 ## Workflow
 
-1. **Trigger:** The user right-clicks a target variable inside the VS Code *Debug Variables* panel while execution is paused.
-2. **Expression Evaluation:** `handleSendToJupyter` extracts the context-aware reference path using `element.variable.evaluateName` (safely falling back to `.name` only if evaluation expressions are absent) to support deep object/list attributes.
-3. **Environment Resolution:** `resolvePythonEnvironment` accesses the active interpreter using the official `ms-python.python` extension API.
-4. **Kernel Management:** `ensurePythonPackages` non-destructively verifies `ipykernel` presence, prompts the user for explicit permission before attempting automated installations (`uv` prioritized, falling back to `pip`), and handles implicit kernel registry hooks.
-5. **Context Ranking:** `resolveCurrentFrameId` queries active execution frames, routing them into the WebAssembly runtime to filter and rank the most suitable active frame via Rust.
-6. **In-Memory Serializing:** `evaluateDapExpression` forces the active debug process to serialize the target evaluation statement into a temporary payload file on disk using Python's native `pickle` module.
-7. **Document Synthesis:** `WasmBridge.generateNotebook` synchronously parses paths, variables, and kernel metadata into a compliant `nbformat 4.5` JSON layout inside the Wasm execution layer.
-8. **Mount & Render:** `writeAndOpenNotebook` writes the file to the local `.d2j_store/` workspace directory, appends data rules to `.gitignore`, and natively boots the interactive notebook interface.
+1. **Context Trigger:** The user right-clicks a target element within the VS Code *Debug Variables* panel during a suspended (`stopped`) debug phase.
+2. **Expression Evaluation:** `handleSendToJupyter` extracts the context-aware reference path using `element.variable.evaluateName` to correctly handle nested child configurations or class instance properties.
+3. **Environment Sync:** `resolvePythonEnvironment` accesses target path metrics through the official `ms-python.python` Extension API wrapper.
+4. **Dependency Resolution:** `ensurePythonPackages` performs non-destructive environment checks, requests explicit authorization prior to execution, and registers the local virtual runtime kernel via `ipykernel`.
+5. **Concurrent Frame Scraping:** `resolveCurrentFrameId` maps across all available parent debug sessions, child subprocesses, and isolated background threads concurrently via `Promise.all()`.
+6. **Worker Offloading:** The raw thread metadata maps are handed directly over to a background Node.js Worker Thread, where the **Rust WebAssembly** module filters, grades, and isolates the most pertinent frame context using multi-threaded vectorized matching. *The background worker layer explicitly checks and awaits the Wasm execution lifecycle to pass a fully evaluated string payload back to the Extension Host.*
+7. **Closure-Safe Serialization:** The extension pushes an atomic Python evaluation script into the target frame. This uses a custom `Pickler` with a lifecycle interceptor (`reducer_override`) to drop or stringify unpicklable elements (closures, local functions, active lock handles) without mutating live data.
+8. **Notebook Compilation:** `WasmBridge.generateNotebook` formats structural coordinates into a compliant `nbformat 4.5` workspace document.
+9. **Persistence Layer:** `writeAndOpenNotebook` writes output targets to an isolated `.d2j_store/` partition, updates local `.gitignore` rules automatically, and boots up the native interactive interface.
+
+## Project Structure
 
 ## Project Structure
 
 ```
 debug-to-jupyter-rust/
-├── src/                      # TypeScript Source Modules
-│   ├── extension.ts          # Extension entry point & lifecycle hooks
-│   ├── commands.ts           # handleSendToJupyter transactional orchestration
-│   ├── dapClient.ts          # DAP execution abstraction, frame tracking & evaluation
-│   ├── pythonEnv.ts          # Core python environment & kernel management
-│   ├── wasmBridge.ts         # Native WebAssembly bridge driver & string marshaling
-│   ├── notebookWriter.ts     # Document file-system I/O & UI rendering
-│   ├── errors.ts             # D2JError domains & user-facing message translation
-│   ├── logger.ts             # Configurable OutputChannel debug logging streams
-│   └── utils.ts              # File manipulation helpers & git safety guards
-├── cargo/src/lib.rs          # Rust Source (Core high-performance Wasm module)
-├── pkg/                      # wasm-pack compiled build output (generated CommonJS)
-├── out/                      # TypeScript target compiler output (generated JavaScript)
-├── package.json              # Extension manifest & context-menu bindings
-└── tsconfig.json             # TypeScript configuration parameters
+├── src/                      # TypeScript Source Directory
+│   ├── extension.ts          # Core extension entry point & lazy activation hooks
+│   ├── commands.ts           # handleSendToJupyter lifecycle & transactional engine
+│   ├── dapClient.ts          # Concurrent DAP multiplexer & exponential backoff handler
+│   ├── pythonEnv.ts          # Virtual environment inspector & kernel mounter
+│   ├── wasmBridge.ts         # Worker Thread supervisor & Wasm linear memory gateway
+│   ├── wasmWorker.js         # Dedicated background Node.js execution script (Defensive Await)
+│   ├── notebookWriter.ts     # Document I/O layer & native cell execution controller
+│   ├── errors.ts             # Domain-specific error mappings & crash mitigations
+│   ├── logger.ts             # Layered diagnostic OutputChannel stream router
+│   └── utils.ts              # File layout helpers & automated .gitignore mutators
+├── cargo/src/lib.rs          # Rust Core Engine (Vectorized frame grading & parsing)
+├── pkg/                      # wasm-pack compiled output (CJS modules + binary assets)
+├── out/                      # Transpiled extension execution files
+├── package.json              # Extension manifest, context mappings & lazy load bindings
+└── tsconfig.json             # TypeScript structural compiler configuration
 ```
 
 ## Key Design Decisions
 
 - **No Bundler Overhead** — The extension host directly consumes clean CommonJS artifacts compiled natively into `out/`, ensuring straightforward compilation maintenance.
-- **Synchronous WebAssembly Interop** — `wasm-pack --target nodejs` compiles the module into a zero-dependency package, allowing TypeScript to invoke high-speed Rust handlers instantly using standard Node.js `require()` interfaces.
-- **Zero Third-Party Runtime Dependencies** — Replaced `joblib` with Python's standard library `pickle` module. This drops installation requirements down to just `ipykernel`, reducing runtime crashes on restrictive machines.
-- **Git & Workspace Protection** — Variable exports and cache configurations are completely isolated inside a hidden workspace folder named `.d2j_store/`. The utility automatically mutates the project's `.gitignore` file to ensure heavy datasets are never committed to repositories.
+- **Promise-Resilient Worker-Isolated Wasm Interop** — To prevent locking the main VS Code UI thread, the Wasm module is executed inside a background Node.js Worker Thread. Crucially, the worker implements defensive unwrapping logic (`instanceof Promise`) to guarantee that all serialized structures returned by the Wasm bindings are fully evaluated into raw strings before transmission. This completely eliminates unresolved `[object Promise]` deserialization syntax errors in the Extension Host.
+- **Closure-Resilient Native Serialization** — Standard serialization crashes with a `PicklingError` when variables contain locally scoped methods, lambdas, or closures. D2J resolves this entirely without dependency overhead by injecting a custom native `pickle.Pickler` class that dynamically intercepts and stringifies unpicklable objects using `reducer_override`.
+- **Git & Workspace Protection** — Variable exports and cache configurations are completely isolated inside a hidden workspace folder named `.d2j_store/`. The utility automatically mutates the project's `.gitignore` file to ensure heavy datasets are never accidentally tracked or committed to repositories.
 - **Optimized Lazy Activation** — Discarded general `"onDebug"` event listeners. The extension engine remains inactive until a user interacts with the context menu to keep VS Code's baseline resource utilization clean.
-```

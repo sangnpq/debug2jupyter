@@ -15,37 +15,26 @@ export interface DebugVariableElement {
         variablesReference: number;
         evaluateName?: string;
     };
-    session: vscode.DebugSession;
 }
 
 export async function handleSendToJupyter(
     element: DebugVariableElement,
     wasmBridge: WasmBridge,
-    context: vscode.ExtensionContext
+    context: vscode.ExtensionContext,
 ): Promise<void> {
-    const varName = element.variable.evaluateName ?? element.variable.name;
-    debug(`handleSendToJupyter: varName="${varName}", variablesReference=${element.variable.variablesReference}`);
-
-    if (!varName || varName.trim() === '') {
-        showError(new D2JError('invalidVariable', 'Variable name is empty.'));
-        return;
-    }
-
-    if (!vscode.workspace.workspaceFolders) {
-        showError(new D2JError('noWorkspace', 'No workspace folder is open.'));
-        return;
-    }
-
     const activeSession = vscode.debug.activeDebugSession;
-    debug(`handleSendToJupyter: activeSession=${activeSession ? `${activeSession.id} (${activeSession.name}, type=${activeSession.type})` : 'null'}`);
+    console.log('[commands] handleSendToJupyter START', JSON.stringify({ 
+        name: element.variable.name, 
+        activeDebugSession: activeSession?.id,
+        activeDebugSessionExists: !!vscode.debug.activeDebugSession
+    }));
     if (!activeSession) {
-        showError(new D2JError('noDebugSession', 'No active debug session.'));
+        vscode.window.showErrorMessage('D2J: No active debug session. Start debugging first.');
         return;
     }
-
-    const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-    debug(`handleSendToJupyter: workspaceRoot=${workspaceRoot}`);
-
+    const varName = element.variable.name;
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+    console.log(`[commands] activeSession=${activeSession?.id}, varName=${varName}, workspaceRoot=${workspaceRoot}`);
     try {
         await vscode.window.withProgress(
             {
@@ -67,25 +56,55 @@ export async function handleSendToJupyter(
 
                 progress.report({ message: 'Resolving debug context...' });
                 const frameInfo = await resolveCurrentFrameId(activeSession, undefined, varName, workspaceRoot, wasmBridge);
-                const timestamp = wasmBridge.formatTimestamp();
+                const timestamp = await wasmBridge.formatTimestamp();
                 debug(`handleSendToJupyter: frame resolved (frameId=${frameInfo.frameId}), about to evaluate dump expression`);
 
                 progress.report({ message: 'Dumping variable to pickle...' });
                 const storeDir = path.join(workspaceRoot, '.d2j_store');
                 await fs.promises.mkdir(storeDir, { recursive: true });
-                const pklFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${frameInfo.line ?? 0}_${varName}_${timestamp}.pkl`;
+                const pklFileName = `${await wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${frameInfo.line ?? 0}_${varName}_${timestamp}.pkl`;
                 const pklPath = path.join(storeDir, pklFileName);
                 const escapedPklPath = pklPath.replace(/'/g, "\\'");
-                const dumpExpr = `import pickle; f=open('${escapedPklPath}', 'wb'); pickle.dump(${varName}, f); f.close()`;
-                debug(`handleSendToJupyter: evaluating dumpExpr="${dumpExpr}"`);
-                await evaluateDapExpression(activeSession, dumpExpr, frameInfo, varName, workspaceRoot, wasmBridge);
+
+                // 💡 CRITICAL FIX: Array-join structure ensures clean, multiline Python formatting without compound semicolon runtime issues
+                const dumpScript = [
+                    `import pickle`,
+                    `import types`,
+                    `import io`,
+                    `class D2JSafePickler(pickle.Pickler):`,
+                    `    def reducer_override(self, obj):`,
+                    `        if isinstance(obj, (types.FunctionType, types.LambdaType, types.MethodType)):`,
+                    `            qualname = getattr(obj, '__qualname__', '')`,
+                    `            if '<locals>' in qualname or not hasattr(obj, '__module__'):`,
+                    `                return (str, (f"<D2J_STRIPPED_CLOSURE: {qualname}>",))`,
+                    `        try:`,
+                    `            return NotImplemented`,
+                    `        except Exception:`,
+                    `            return (str, (f"<D2J_UNPICKLABLE_OBJECT: {type(obj).__name__}>",))`,
+                    `try:`,
+                    `    with open('${escapedPklPath}', 'wb') as f:`,
+                    `        pickler = D2JSafePickler(f, protocol=pickle.HIGHEST_PROTOCOL)`,
+                    `        pickler.dump(${varName})`,
+                    `    print("D2J_SUCCESS")`,
+                    `except Exception as e:`,
+                    `    with open('${escapedPklPath}', 'wb') as f:`,
+                    `        pickle.dump(f"<D2J_SERIALIZATION_FAILURE: {str(e)}>", f)`,
+                    `    print("D2J_FALLBACK")`
+                ].join('\n');
+
+                debug(`handleSendToJupyter: evaluating dumpScript="${dumpScript.replace(/\n/g, '\\n')}"`);
+                console.log(`[commands] BEFORE evaluateDapExpression`);
+                await evaluateDapExpression(activeSession, dumpScript, frameInfo, varName, workspaceRoot, wasmBridge);
+                console.log(`[commands] AFTER evaluateDapExpression`);
                 debug(`handleSendToJupyter: dump succeeded, pklPath=${pklPath}`);
 
                 progress.report({ message: 'Generating notebook...' });
-                const notebookJson = wasmBridge.generateNotebook(varName, pklPath, pyEnv.venvName);
+                console.log(`[commands] generateNotebook START: varName=${varName}, pklPath=${pklPath}, venvName=${pyEnv.venvName}`);
+                const notebookJson = await wasmBridge.generateNotebook(varName, pklPath, pyEnv.venvName);
+                console.log(`[commands] generateNotebook DONE, json len=${notebookJson.length}`);
 
                 progress.report({ message: 'Writing notebook file...' });
-                const notebookFileName = `${wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${timestamp}.ipynb`;
+                const notebookFileName = `${await wasmBridge.sanitizeSourcePath(frameInfo.sourcePath ?? 'unknown', workspaceRoot)}_${timestamp}.ipynb`;
                 const notebookPath = path.join(storeDir, notebookFileName);
                 await writeAndOpenNotebook(notebookJson, notebookPath);
                 debug(`handleSendToJupyter: notebook written to ${notebookPath}`);

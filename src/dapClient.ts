@@ -113,7 +113,7 @@ export async function resolveCurrentFrameId(
 
         let sorted: ThreadFrameInfo[];
         if (wasmBridge) {
-            const ranked = wasmBridge.rankThreadCandidates(candidates.map(c => ({
+            const ranked = await wasmBridge.rankThreadCandidates(candidates.map(c => ({
                 thread_id: c.threadId,
                 thread_name: c.threadName,
                 frame_id: c.frameId,
@@ -163,14 +163,15 @@ export async function resolveCurrentFrameId(
         debug(`resolveCurrentFrameId: variable "${variableName}" not found in any frame; falling back to heuristic selection`);
     }
 
-    const isVirtual = (s: { path?: string; name?: string; sourceReference?: number }) =>
-        wasmBridge ? wasmBridge.isVirtualSource(s) : (s.sourceReference && s.sourceReference > 0) || s.path === '<string>' || s.path === '<stdin>' || s.path === '<repl>' || (!s.path && !s.name);
+    const isVirtual = async (s: { path?: string; name?: string; sourceReference?: number }) =>
+        wasmBridge ? await wasmBridge.isVirtualSource(s) : (s.sourceReference && s.sourceReference > 0) || s.path === '<string>' || s.path === '<stdin>' || s.path === '<repl>' || (!s.path && !s.name);
 
-    const realCandidates = candidates.filter(c => !isVirtual({ path: c.sourcePath, name: c.sourceName, sourceReference: c.sourceRef }));
+    const realCandidates = (await Promise.all(candidates.map(async c => ({ c, isVirt: await isVirtual({ path: c.sourcePath, name: c.sourceName, sourceReference: c.sourceRef }) })))).filter(x => !x.isVirt).map(x => x.c);
     const preferred = preferredThreadId !== undefined ? candidates.find(c => c.threadId === preferredThreadId) : undefined;
+    const preferredIsVirtual = preferred ? await isVirtual({ path: preferred.sourcePath, name: preferred.sourceName, sourceReference: preferred.sourceRef }) : true;
 
     let chosen: ThreadFrameInfo;
-    if (preferred && !isVirtual({ path: preferred.sourcePath, name: preferred.sourceName, sourceReference: preferred.sourceRef })) {
+    if (preferred && !preferredIsVirtual) {
         debug(`resolveCurrentFrameId: using preferred threadId=${preferred.threadId} name="${preferred.threadName}" (real source)`);
         chosen = preferred;
     } else if (realCandidates.length > 0) {
@@ -178,14 +179,14 @@ export async function resolveCurrentFrameId(
             debug(`resolveCurrentFrameId: preferred threadId=${preferredThreadId} is virtual source, picking best real-source thread instead`);
         }
         if (wasmBridge) {
-            const ranked = wasmBridge.rankThreadCandidates(realCandidates.map(c => ({
+            const ranked = await wasmBridge.rankThreadCandidates(realCandidates.map(c => ({
                 thread_id: c.threadId,
                 thread_name: c.threadName,
                 frame_id: c.frameId,
                 frame_name: c.frameName,
-                source_path: c.sourcePath ?? null,
-                source_name: c.sourceName ?? null,
-                source_ref: c.sourceRef ?? null,
+                source_path: c.sourcePath ?? null, 
+                source_name: c.sourceName ?? null, 
+                source_ref: c.sourceRef ?? null,   
                 line: c.line ?? null,
                 has_variable: c.hasVariable ?? null,
             })), workspaceRoot ?? '');
@@ -236,7 +237,9 @@ export async function evaluateDapExpression(
     workspaceRoot?: string,
     wasmBridge?: WasmBridge,
 ): Promise<string> {
+    console.log(`[evaluateDapExpression] START: expression="${expression.substring(0, 50)}..."`);
     let resolved = frameInfo ?? await resolveCurrentFrameId(session, undefined, variableName, workspaceRoot, wasmBridge);
+    console.log(`[evaluateDapExpression] resolved frameId=${resolved.frameId}`);
 
     const args: { expression: string; context: string; frameId: number } = {
         expression,
@@ -246,9 +249,11 @@ export async function evaluateDapExpression(
     debug(`evaluateDapExpression: START frameId=${args.frameId}, threadId=${resolved.threadId}, source=${resolved.sourcePath ?? '(no path)'}, line=${resolved.line}, expression="${expression}"`);
     const evalStart = Date.now();
 
+    console.log(`[evaluateDapExpression] about to call session.customRequest('evaluate', frameId=${args.frameId})`);
     let response: { result?: string } | undefined;
     try {
         response = await session.customRequest('evaluate', args) as { result?: string };
+        console.log(`[evaluateDapExpression] evaluate succeeded, result="${response.result}"`);
         debug(`evaluateDapExpression: first attempt OK (${Date.now() - evalStart}ms)`);
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
